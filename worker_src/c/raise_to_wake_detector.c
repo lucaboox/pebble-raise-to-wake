@@ -36,7 +36,7 @@ static void invalidate(RtwDetector *d, RtwBlockReason reason) {
   // Noise and gaps cannot unlock a wrist that has already triggered.
   if (d->state != RTW_VIEWING) d->state = RTW_WAIT_LOWERED;
   d->filter_ready = false;
-  d->view_samples = d->lower_samples = 0;
+  d->view_samples = d->lower_samples = d->rest_samples = 0;
   d->have_view_entry = false;
   d->transient_motion = false;
   d->block_reason = reason;
@@ -94,6 +94,7 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
         // The next valid sample reseeds the filter; settling is still required.
         d->filter_ready = false;
         d->view_samples = 0;
+        d->rest_samples = 0;
         d->have_view_entry = false;
         if (d->state == RTW_CONFIRMING_VIEW) d->state = RTW_ROTATING;
         d->block_reason = RTW_BLOCK_GRAVITY;
@@ -124,7 +125,7 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
     // wrist rotates. That is a filter artefact, not loss of the lowered pose.
     // Reseed only from a valid raw sample, and require fresh confirmation.
     d->gravity = d->previous = raw;
-    d->view_samples = d->lower_samples = 0;
+    d->view_samples = d->lower_samples = d->rest_samples = 0;
     d->have_view_entry = false;
     if (d->state == RTW_CONFIRMING_VIEW) d->state = RTW_ROTATING;
     d->block_reason = RTW_BLOCK_FILTER;
@@ -150,7 +151,7 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
       }
       if (!d->cooldown) {
         d->resting = d->gravity;
-        d->lower_samples = 0;
+        d->view_samples = d->lower_samples = d->rest_samples = 0;
         d->state = RTW_ARMED;
         d->block_reason = RTW_BLOCK_NONE;
       } else {
@@ -158,6 +159,29 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
       }
     }
     return RTW_EVENT_NONE;
+  }
+
+  // A reference held from an earlier arm position exaggerates later typing
+  // tilts. Refresh only after a genuinely settled lowered window, measured
+  // against one anchor so a slow continuous raise cannot accumulate as rest.
+  if (is_lowered && stable) {
+    if (!d->rest_samples || distance_squared(d->gravity, d->rest_anchor) >
+        RTW_REST_REFRESH_DRIFT_MG * RTW_REST_REFRESH_DRIFT_MG) {
+      d->rest_anchor = d->gravity;
+      d->rest_samples = 1;
+    } else {
+      ++d->rest_samples;
+    }
+    if (d->rest_samples >= RTW_REST_REFRESH_SAMPLES) {
+      d->resting = d->gravity;
+      d->view_samples = d->lower_samples = d->rest_samples = 0;
+      d->have_view_entry = false;
+      d->state = RTW_ARMED;
+      d->block_reason = RTW_BLOCK_REST_REFRESH;
+      return RTW_EVENT_NONE;
+    }
+  } else {
+    d->rest_samples = 0;
   }
 
   int64_t rotation = distance_squared(d->resting, d->gravity);
@@ -243,6 +267,7 @@ const char *rtw_block_reason_name(RtwBlockReason reason) {
     case RTW_BLOCK_GRAVITY: return "accel-magnitude";
     case RTW_BLOCK_TIMEOUT: return "rotation-timeout";
     case RTW_BLOCK_FILTER: return "filter-start";
+    case RTW_BLOCK_REST_REFRESH: return "rest-refreshed";
   }
   return "unknown";
 }

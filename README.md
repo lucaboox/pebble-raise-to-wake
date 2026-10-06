@@ -22,7 +22,9 @@ The detector progresses through `WAIT_LOWERED → ARMED → ROTATING → CONFIRM
 4. Activate the light immediately on confirmation. Stay in `VIEWING` even if the light's duration expires.
 5. Require three samples clearly outside the wider exit boundary before reporting lowering. A 500 ms cooldown also prevents rapid repeat raises.
 
-The viewing region was widened after real Pebble Time logs showed missed tilted and near-vertical poses. Entering requires X −550…550, Y −1150…−300, Z −1100…450 milli-g. Exiting requires leaving the wider X −650…650, Y −1250…−200, Z −1200…550 region. Values between the entry and exit boundaries do not flicker the light or rearm the detector. Z still rejects more fully screen-down poses, such as Y −700 / Z +714.
+The viewing region includes tilted and near-vertical poses observed in real Pebble Time logs, while rejecting shallow typing tilts. Entering requires X −550…550, Y −1150…−550, Z −1100…450 milli-g. Exiting requires leaving the wider X −650…650, Y −1250…−350, Z −1200…550 region. The previous Y entry limit of −300 accepted typing poses around Y −344…−410; revision 4 moves it to −550. This requires a more upright screen and can reject deliberately shallow viewing angles. Values between the entry and exit boundaries do not flicker the light or rearm the detector. Z still rejects more fully screen-down poses, such as Y −700 / Z +714.
+
+Before a successful raise, the detector refreshes its resting reference only after eight consecutive settled lowered samples with no more than 40 milli-g total drift from one anchor. This prevents a reference from an earlier arm position exaggerating a tiny later typing tilt. A continuous rotation breaks that stationary window, so the reference remains fixed during a raise. This reference maintenance adds no waiting once a valid raise reaches viewing orientation.
 
 Direction is measured by decreasing squared X/Y/Z distance to the accepted viewing region. The previous fixed ideal-direction dot product incorrectly rejected raises from a flat resting wrist toward a vertical screen: Y becomes more negative while Z becomes less negative, cancelling its direction score. The detector still requires a 350 milli-g vector change and consecutive stable viewing samples.
 
@@ -56,11 +58,12 @@ All important parameters are in `src/c/raise_to_wake_config.h`:
 | `RTW_GRAVITY_FILTER_DIVISOR` | 2; short filter |
 | `RTW_TRANSIENT_GRAVITY_*`, `RTW_TRANSIENT_MOTION_MAX_MS` | 250–2500 milli-g / 400 ms; bounded motion interruption without discarding the lowered reference |
 | `RTW_LOWER_CONFIRM_SAMPLES`, `RTW_COOLDOWN_MS` | 3 / 500 ms; lowering and repeat suppression |
+| `RTW_REST_REFRESH_SAMPLES`, `RTW_REST_REFRESH_DRIFT_MG` | 8 / 40; refresh the lowered reference after a settled window, without following ongoing rotation |
 | `RTW_ROTATION_TIMEOUT_MS` | 1500 ms per attempt; expiry clears confirmation and permits a fresh attempt from the confirmed lowered reference |
 | `RTW_DEFAULT_LIGHT_DURATION_SECONDS` | 5; persisted Set Timeout setting overrides this |
 | `RTW_LOG_XYZ`, `RTW_XYZ_LOG_INTERVAL_MS` | XYZ logging once per second; set logging to 0 after tuning |
 
-The startup log prints `RTW rev=3` to identify the build with recovery fixes. State transitions and raises are logged, including `RTW raise detected: 3 samples, ... ms from view entry`. The millisecond latency measures the sampled viewing-entry point, not a separately measured physical wrist angle. Transition messages include triggering XYZ values. Once-per-second raw XYZ / filtered gravity logs also show `gate=` and confirmation count `n=`. Gates distinguish `outside-view`, `no-view-progress`, `small-rotation`, `unsettled`, `accel-magnitude`, `rotation-timeout`, `sample-gap`, `vibration`, and waiting for lowering/cooldown. There is no continuous per-sample logging.
+The startup log prints `RTW rev=4` to identify the build with typing-tilt suppression and the preceding recovery fixes. State transitions and raises are logged, including `RTW raise detected: 3 samples, ... ms from view entry`. The millisecond latency measures the sampled viewing-entry point, not a separately measured physical wrist angle. Transition messages include triggering XYZ values. Once-per-second raw XYZ / filtered gravity logs also show `gate=` and confirmation count `n=`. Gates distinguish `outside-view`, `no-view-progress`, `small-rotation`, `unsettled`, `accel-magnitude`, `rotation-timeout`, `sample-gap`, `vibration`, `rest-refreshed`, and waiting for lowering/cooldown. There is no continuous per-sample logging.
 
 For the first hardware run, use three viewing samples and 25 Hz. Lower the wrist briefly, then raise normally; repeat with slower raises and on the wrist you normally wear the watch. Hold viewing for longer than the light timeout: it must not retrigger. Test tiny viewing-boundary movements, lowering and raising again, walking, typing, button interactions, notifications, and connecting/disconnecting the charger. Record missed raises, false activations, viewing XYZ values and logged latencies before changing thresholds.
 
@@ -94,4 +97,4 @@ With Node.js, Clang and wasm-ld available:
 node tests/raise_to_wake.test.js
 ```
 
-This compiles the actual C detector and worker into WebAssembly with a small SDK shim, then exercises gesture latency, log-derived viewing endpoints and acceleration bursts, hysteresis, cooldown, lowering, walking-like traces, timeout recovery, opposing gravity vectors, impacts, vibration, sample gaps, settings, timer lifecycle, ambient mode and charging behavior. All 52 checks passed. It is not a Pebble SDK build or a substitute for real-wrist traces.
+This compiles the actual C detector and worker into WebAssembly with a small SDK shim, then exercises gesture latency, log-derived viewing endpoints, shallow typing poses and acceleration bursts, settled-reference maintenance, hysteresis, cooldown, lowering, walking-like traces, timeout recovery, opposing gravity vectors, impacts, vibration, sample gaps, settings, timer lifecycle, ambient mode and charging behavior. All 58 checks passed. It is not a Pebble SDK build or a substitute for real-wrist traces.

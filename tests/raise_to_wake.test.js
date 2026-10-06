@@ -138,6 +138,34 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     for (let i = 0; i < 400; ++i) feed(980, 120 * Math.sin(i / 5), -80 * Math.cos(i / 7));
     assert.strictEqual(raises, 0);
   });
+  for (const pose of [[-91, -344, -969], [-118, -357, -909], [-71, -410, -997]]) {
+    test('log-derived shallow typing tilt does not activate ' + pose, () => {
+      hold(-69, 23, -978, 800);
+      hold(...pose, 3000); assert.strictEqual(raises, 0);
+      hold(-69, 23, -978, 800); hold(-131, -753, -648, 400);
+      assert.strictEqual(raises, 1);
+    });
+  }
+  test('settled lowered posture replaces stale reference before a small viewing-boundary tilt', () => {
+    hold(0, 700, -714, 800);
+    hold(0, -300, -954, 2000); assert.strictEqual(raises, 0);
+    hold(0, -560, -828, 2000); assert.strictEqual(raises, 0);
+    hold(0, -300, -954, 800); hold(0, -950, -312, 400);
+    assert.strictEqual(raises, 1);
+  });
+  test('repeated shallow typing tilts remain quiet then a deliberate raise lights the worker', () => {
+    startWorker(); hold(-69, 23, -978, 800);
+    for (let i = 0; i < 12; ++i) {
+      hold(-118, -357, -909, 400); hold(-73, -166, -975, 600);
+    }
+    assert.strictEqual(api.mock_on_calls(), 0);
+    hold(-69, 23, -978, 800); hold(-131, -753, -648, 400);
+    assert.strictEqual(api.mock_on_calls(), 1);
+  });
+  test('settled-reference refresh does not follow a slow continuous raise', () => {
+    hold(15, -90, -1000, 800); rotateFromFlatTo(-433, -647, -663, 2400);
+    assert.strictEqual(raises, 1); assert.strictEqual(api.core_state(), VIEWING);
+  });
   test('walking-like rhythmic swings do not settle into viewing', () => {
     lower();
     for (let i = 0; i < 500; ++i) {
