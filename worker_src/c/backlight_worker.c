@@ -72,8 +72,9 @@ static void handle_accel(AccelData *data, uint32_t num_samples) {
     RtwEvent event = rtw_detector_update(&s_detector, sample->x, sample->y, sample->z,
                                         sample->timestamp, sample->did_vibrate);
     if (before != s_detector.state) {
-      APP_LOG(APP_LOG_LEVEL_INFO, "RTW %s -> %s", rtw_state_name(before),
-              rtw_state_name(s_detector.state));
+      APP_LOG(APP_LOG_LEVEL_INFO, "RTW %s -> %s gate=%s xyz=%d,%d,%d", rtw_state_name(before),
+              rtw_state_name(s_detector.state), rtw_block_reason_name(s_detector.block_reason),
+              sample->x, sample->y, sample->z);
       if (s_detector.state == RTW_ARMED) {
         APP_LOG(APP_LOG_LEVEL_INFO, "RTW lowered confirmed; armed");
       }
@@ -81,9 +82,11 @@ static void handle_accel(AccelData *data, uint32_t num_samples) {
 #if RTW_LOG_XYZ
     if (!s_have_log_time || sample->timestamp < s_last_log_ms ||
         sample->timestamp - s_last_log_ms >= RTW_XYZ_LOG_INTERVAL_MS) {
-      APP_LOG(APP_LOG_LEVEL_DEBUG, "RTW xyz=%d,%d,%d gravity=%ld,%ld,%ld vibe=%d",
+      APP_LOG(APP_LOG_LEVEL_DEBUG, "RTW xyz=%d,%d,%d g=%ld,%ld,%ld gate=%s n=%u/%u vibe=%d",
               sample->x, sample->y, sample->z, (long)s_detector.gravity.x,
-              (long)s_detector.gravity.y, (long)s_detector.gravity.z, sample->did_vibrate);
+              (long)s_detector.gravity.y, (long)s_detector.gravity.z,
+              rtw_block_reason_name(s_detector.block_reason), s_detector.view_samples,
+              s_detector.required_view_samples, sample->did_vibrate);
       s_last_log_ms = sample->timestamp;
       s_have_log_time = true;
     }

@@ -48,6 +48,18 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     }
   }
   function raise(duration = 480, sign = 1) { rotate(duration, sign); hold(0, -700, -714, 240); }
+  // Log-derived endpoints, interpolated at 25 Hz: the supplied log records
+  // only one XYZ reading per second, so these are not full hardware replays.
+  function rotateFromFlatTo(x, y, z, duration = 480) {
+    const count = Math.ceil(duration / 40);
+    for (let i = 1; i <= count; ++i) {
+      const t = i / count;
+      const v = [x * t, -90 + (y + 90) * t, -1000 + (z + 1000) * t];
+      const scale = 1000 / Math.hypot(...v);
+      feed(...v.map(value => value * scale));
+    }
+    hold(x, y, z, 280);
+  }
   function startWorker(settings = {}) {
     for (const [key, value] of Object.entries(settings)) api.mock_setting(+key, value);
     api.mock_start(); worker = true;
@@ -78,6 +90,24 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     lower(); hold(0, -1000, 0, 360);
     assert.strictEqual(raises, 1);
   });
+  for (const pose of [[-433, -647, -663], [-290, -718, -690],
+                      [-174, -1048, -42], [-131, -1038, 290], [-179, -1059, 449]]) {
+    test('flat resting wrist to log-derived viewing pose ' + pose.join(','), () => {
+      hold(15, -90, -1000, 800);
+      assert.strictEqual(api.core_state(), ARMED);
+      const arrival = now + 480;
+      rotateFromFlatTo(...pose);
+      assert.strictEqual(raises, 1);
+      assert(raisedAt - arrival <= 200, 'settled viewing pose should confirm promptly');
+      hold(...pose, 3000); assert.strictEqual(raises, 1);
+    });
+  }
+  test('startup in log-derived tilted viewing pose waits for lowering', () => {
+    hold(-433, -647, -663, 3000);
+    assert.strictEqual(raises, 0); assert.strictEqual(api.core_state(), WAIT);
+    hold(15, -90, -1000, 800); rotateFromFlatTo(-433, -647, -663);
+    assert.strictEqual(raises, 1);
+  });
   test('holding wrist raised never retriggers', () => {
     lower(); raise(); hold(0, -700, -714, 10000);
     assert.strictEqual(raises, 1); assert.strictEqual(api.core_state(), VIEWING);
@@ -88,12 +118,13 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
   });
   test('hysteresis prevents exit and rearm on inner-boundary jitter', () => {
     lower(); raise();
-    for (let i = 0; i < 100; ++i) feed(i % 2 ? 290 : 240, -700, -660);
+    hold(540, -700, -500, 240);
+    for (let i = 0; i < 100; ++i) feed(i % 2 ? 590 : 540, -700, -500);
     assert.strictEqual(lowers, 0); assert.strictEqual(raises, 1);
     assert.strictEqual(api.core_state(), VIEWING);
   });
   test('short excursion beyond exit boundary does not lower', () => {
-    lower(); raise(); feed(390, -700, -600); hold(0, -700, -714, 800);
+    lower(); raise(); feed(690, -600, -400); hold(0, -700, -714, 800);
     assert.strictEqual(lowers, 0); assert.strictEqual(raises, 1);
   });
   test('lowering inside cooldown cannot immediately retrigger', () => {
@@ -128,6 +159,26 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     lower(); rotate(320); feed(0, -700, -714, true); hold(0, -700, -714, 1600);
     assert.strictEqual(raises, 0); lower(); raise(); assert.strictEqual(raises, 1);
   });
+  test('brief acceleration burst during a raise preserves the lowered reference', () => {
+    hold(15, -90, -1000, 800);
+    feed(-100, -500, -850); feed(0, -300, -1400);
+    assert.strictEqual(raises, 0);
+    const entry = now + 40;
+    hold(-433, -647, -663, 360);
+    assert.strictEqual(raises, 1); assert(raisedAt - entry <= 200);
+  });
+  test('isolated acceleration burst with no orientation change never raises', () => {
+    hold(15, -90, -1000, 800); feed(0, -90, -1450);
+    hold(15, -90, -1000, 1200); assert.strictEqual(raises, 0);
+  });
+  for (const [z, duration] of [[-1450, 280], [-4000, 40]]) {
+    test('prolonged or severe impact cancels candidate z=' + z, () => {
+      hold(15, -90, -1000, 800); hold(0, 0, z, duration);
+      hold(-433, -647, -663, 2000); assert.strictEqual(raises, 0);
+      hold(15, -90, -1000, 800); rotateFromFlatTo(-433, -647, -663);
+      assert.strictEqual(raises, 1);
+    });
+  }
   test('impacts and data gaps do not trigger or unlock raised wrist', () => {
     lower(); feed(0, -700, -714, false, 1000); hold(0, -700, -714, 600);
     assert.strictEqual(raises, 0);

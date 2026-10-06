@@ -8,31 +8,33 @@
 #define RTW_MIN_CONFIRM_SAMPLES 2
 #define RTW_MAX_CONFIRM_SAMPLES 10
 
-// Preserve the reference project's X/Y viewing region, with an added Z limit.
-// Negative Z is screen-up; small positive Z allows near-vertical viewing.
-#define RTW_VIEW_X_MIN_MG (-250)
-#define RTW_VIEW_X_MAX_MG 250
-#define RTW_VIEW_Y_MIN_MG (-1000)
+// Include the tilted/near-vertical poses observed in the Pebble Time logs.
+// Negative Z is screen-up; positive Z is allowed only near vertical.
+#define RTW_VIEW_X_MIN_MG (-550)
+#define RTW_VIEW_X_MAX_MG 550
+#define RTW_VIEW_Y_MIN_MG (-1150)
 #define RTW_VIEW_Y_MAX_MG (-300)
 #define RTW_VIEW_Z_MIN_MG (-1100)
-#define RTW_VIEW_Z_MAX_MG 150
+#define RTW_VIEW_Z_MAX_MG 450
 
 // Wider outer boundary: leave this region before confirming lowering.
-#define RTW_RETAIN_X_MIN_MG (-350)
-#define RTW_RETAIN_X_MAX_MG 350
-#define RTW_RETAIN_Y_MIN_MG (-1100)
+#define RTW_RETAIN_X_MIN_MG (-650)
+#define RTW_RETAIN_X_MAX_MG 650
+#define RTW_RETAIN_Y_MIN_MG (-1250)
 #define RTW_RETAIN_Y_MAX_MG (-200)
 #define RTW_RETAIN_Z_MIN_MG (-1200)
-#define RTW_RETAIN_Z_MAX_MG 300
+#define RTW_RETAIN_Z_MAX_MG 550
 
 #define RTW_GRAVITY_FILTER_DIVISOR 2 // Short filter: about one sample of lag.
 #define RTW_GRAVITY_MIN_MG 700
 #define RTW_GRAVITY_MAX_MG 1300
+// Ignore a short acceleration burst during a raise, but never confirm on it.
+#define RTW_TRANSIENT_GRAVITY_MIN_MG 500
+#define RTW_TRANSIENT_GRAVITY_MAX_MG 1800
+#define RTW_TRANSIENT_MOTION_MAX_MS 160
 #define RTW_ROTATION_START_MG 220
 #define RTW_ROTATION_TOTAL_MG 350
-#define RTW_DIRECTION_GAIN_MG_SQUARED 100000
-#define RTW_VIEW_DIRECTION_Y_MG (-700)
-#define RTW_VIEW_DIRECTION_Z_MG (-700)
+#define RTW_VIEW_PROGRESS_MG_SQUARED 10000 // Decrease in distance to viewing region.
 #define RTW_STABLE_DELTA_MG 140
 #define RTW_STABLE_RESIDUAL_MG 180
 #define RTW_LOWER_CONFIRM_SAMPLES 3

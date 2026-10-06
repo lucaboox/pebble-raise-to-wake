@@ -22,9 +22,13 @@ The detector progresses through `WAIT_LOWERED → ARMED → ROTATING → CONFIRM
 4. Activate the light immediately on confirmation. Stay in `VIEWING` even if the light's duration expires.
 5. Require three samples clearly outside the wider exit boundary before reporting lowering. A 500 ms cooldown also prevents rapid repeat raises.
 
-The initial viewing region retains the reference's X/Y bounds and adds Z to reject screen-down poses. Entering requires X −250…250, Y −1000…−300, Z −1100…150 milli-g. Exiting requires leaving the wider X −350…350, Y −1100…−200, Z −1200…300 region. Values between the entry and exit boundaries do not flicker the light or rearm the detector.
+The viewing region was widened after real Pebble Time logs showed missed tilted and near-vertical poses. Entering requires X −550…550, Y −1150…−300, Z −1100…450 milli-g. Exiting requires leaving the wider X −650…650, Y −1250…−200, Z −1200…550 region. Values between the entry and exit boundaries do not flicker the light or rearm the detector. Z still rejects more fully screen-down poses, such as Y −700 / Z +714.
 
-At 25 Hz, three valid samples span 80 ms from first to third; sampling phase, filtering and settling add some delay. Host traces of 320–1200 ms raises measured **120–160 ms from raw viewing-region entry to detection**, before real-device delivery overhead. This is a target and synthetic result, not a hardware measurement. Vibration, impacts, long sample gaps and timestamp discontinuities invalidate incomplete gestures without unlocking an already-raised wrist.
+Direction is measured by decreasing squared X/Y/Z distance to the accepted viewing region. The previous fixed ideal-direction dot product incorrectly rejected raises from a flat resting wrist toward a vertical screen: Y becomes more negative while Z becomes less negative, cancelling its direction score. The detector still requires a 350 milli-g vector change and consecutive stable viewing samples.
+
+At 25 Hz, three valid samples span 80 ms from first to third; sampling phase, filtering and settling add some delay. Host traces of 320–1200 ms raises measured **120–200 ms from raw viewing-region entry to detection**, before real-device delivery overhead. Log-derived flat-to-tilted/vertical traces also confirm within 200 ms of reaching their final posture. Entering the wider region while still moving can take longer to confirm. These are synthetic results, not hardware measurements: the supplied watch log contains XYZ snapshots only once per second, so the tests interpolate between recorded endpoints.
+
+A modest acceleration burst outside the normal 700–1300 milli-g range can interrupt confirmation for less than 160 ms without discarding an armed lowered reference. These samples never count as viewing confirmation; the filter is reseeded and stable valid samples are required after recovery. Sustained bursts, severe impacts, vibration, long sample gaps and timestamp discontinuities cancel incomplete gestures without unlocking an already-raised wrist.
 
 ## Settings and light behavior
 
@@ -45,15 +49,16 @@ All important parameters are in `src/c/raise_to_wake_config.h`:
 | `RTW_VIEW_*`, `RTW_RETAIN_*` | Viewing and wider exit orientation bounds |
 | `RTW_DEFAULT_CONFIRM_SAMPLES` | 3; also adjustable in the app |
 | `RTW_ROTATION_START_MG`, `RTW_ROTATION_TOTAL_MG` | 220 / 350; required gravity-vector change |
-| `RTW_DIRECTION_GAIN_MG_SQUARED`, `RTW_VIEW_DIRECTION_*` | Rotation toward a likely viewing direction |
+| `RTW_VIEW_PROGRESS_MG_SQUARED` | 10000; minimum decrease in squared distance to the viewing region |
 | `RTW_STABLE_DELTA_MG`, `RTW_STABLE_RESIDUAL_MG` | 140 / 180; short stability checks |
 | `RTW_GRAVITY_FILTER_DIVISOR` | 2; short filter |
+| `RTW_TRANSIENT_GRAVITY_*`, `RTW_TRANSIENT_MOTION_MAX_MS` | 500–1800 milli-g / 160 ms; bounded motion interruption without discarding the lowered reference |
 | `RTW_LOWER_CONFIRM_SAMPLES`, `RTW_COOLDOWN_MS` | 3 / 500 ms; lowering and repeat suppression |
 | `RTW_ROTATION_TIMEOUT_MS` | 1500 ms maximum gesture length; no waiting once view is confirmed |
 | `RTW_DEFAULT_LIGHT_DURATION_SECONDS` | 5; persisted Set Timeout setting overrides this |
 | `RTW_LOG_XYZ`, `RTW_XYZ_LOG_INTERVAL_MS` | XYZ logging once per second; set logging to 0 after tuning |
 
-State transitions and raises are logged, including `RTW raise detected: 3 samples, ... ms from view entry`. The millisecond latency measures the sampled viewing-entry point, not a separately measured physical wrist angle. Raw XYZ / filtered gravity logs run once per second instead of every sample.
+State transitions and raises are logged, including `RTW raise detected: 3 samples, ... ms from view entry`. The millisecond latency measures the sampled viewing-entry point, not a separately measured physical wrist angle. Transition messages include triggering XYZ values. Once-per-second raw XYZ / filtered gravity logs also show `gate=` and confirmation count `n=`. Gates distinguish `outside-view`, `no-view-progress`, `small-rotation`, `unsettled`, `accel-magnitude`, `rotation-timeout`, `sample-gap`, `vibration`, and waiting for lowering/cooldown. There is no continuous per-sample logging.
 
 For the first hardware run, use three viewing samples and 25 Hz. Lower the wrist briefly, then raise normally; repeat with slower raises and on the wrist you normally wear the watch. Hold viewing for longer than the light timeout: it must not retrigger. Test tiny viewing-boundary movements, lowering and raising again, walking, typing, button interactions, notifications, and connecting/disconnecting the charger. Record missed raises, false activations, viewing XYZ values and logged latencies before changing thresholds.
 
@@ -87,4 +92,4 @@ With Node.js, Clang and wasm-ld available:
 node tests/raise_to_wake.test.js
 ```
 
-This compiles the actual C detector and worker into WebAssembly with a small SDK shim, then exercises gesture latency, hysteresis, cooldown, lowering, walking-like traces, vibration, sample gaps, settings, timer lifecycle, ambient mode and charging behavior. All 33 checks passed. It is not a Pebble SDK build or a substitute for real-wrist traces.
+This compiles the actual C detector and worker into WebAssembly with a small SDK shim, then exercises gesture latency, log-derived viewing endpoints, hysteresis, cooldown, lowering, walking-like traces, brief acceleration bursts, impacts, vibration, sample gaps, settings, timer lifecycle, ambient mode and charging behavior. All 43 checks passed. It is not a Pebble SDK build or a substitute for real-wrist traces.
