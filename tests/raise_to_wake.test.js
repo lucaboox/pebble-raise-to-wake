@@ -171,7 +171,60 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     hold(15, -90, -1000, 800); feed(0, -90, -1450);
     hold(15, -90, -1000, 1200); assert.strictEqual(raises, 0);
   });
-  for (const [z, duration] of [[-1450, 280], [-4000, 40]]) {
+  for (const burst of [[-324, 1855, -476], [251, -1506, 1208], [-249, 90, -374]]) {
+    test('log-derived acceleration burst does not strand the next viewing pose ' + burst, () => {
+      hold(-58, 350, -961, 800); hold(...burst, 80);
+      assert.strictEqual(raises, 0);
+      const entry = now + 40;
+      hold(-138, -1051, -51, 400);
+      assert.strictEqual(raises, 1); assert(raisedAt - entry <= 200);
+      hold(-138, -1051, -51, 4000); assert.strictEqual(raises, 1);
+    });
+  }
+  test('rotation timeout at viewing entry can retry without another lowering', () => {
+    lower(); hold(600, -500, -624, 1440);
+    assert.strictEqual(raises, 0);
+    const entry = now + 40;
+    hold(0, -700, -714, 400);
+    assert.strictEqual(raises, 1); assert(raisedAt - entry <= 200);
+    hold(0, -700, -714, 8000); assert.strictEqual(raises, 1);
+  });
+  test('opposing valid orientations do not lose the lowered reference in the filter', () => {
+    hold(0, 1000, 0, 800);
+    const entry = now + 40;
+    hold(0, -1000, 0, 400);
+    assert.strictEqual(raises, 1); assert(raisedAt - entry <= 200);
+  });
+  test('expired non-viewing attempts never light the screen and permit a later raise', () => {
+    lower(); hold(600, -500, -624, 6000); assert.strictEqual(raises, 0);
+    const entry = now + 40;
+    hold(0, -700, -714, 400);
+    assert.strictEqual(raises, 1); assert(raisedAt - entry <= 200);
+  });
+  test('startup already raised cannot use burst or timeout recovery to arm', () => {
+    hold(-138, -1051, -51, 800); feed(-324, 1855, -476);
+    hold(-138, -1051, -51, 8000);
+    assert.strictEqual(raises, 0); assert.strictEqual(api.core_state(), WAIT);
+  });
+  test('a burst clears partial viewing confirmation and requires fresh stable samples', () => {
+    hold(15, -90, -1000, 800);
+    for (let i = 0; i < 8 && api.core_state() !== 3; ++i) feed(-433, -647, -663);
+    assert.strictEqual(api.core_state(), 3); assert.strictEqual(raises, 0);
+    feed(-324, 1855, -476);
+    for (let i = 0; i < 3; ++i) feed(-433, -647, -663);
+    assert.strictEqual(raises, 0);
+    feed(-433, -647, -663); assert.strictEqual(raises, 1);
+  });
+  test('worker recovers a fast raise without timer expiry or motion unlocking VIEWING', () => {
+    startWorker({6: 2}); hold(-58, 350, -961, 800); feed(251, -1506, 1208);
+    hold(-138, -1051, -51, 400); assert.strictEqual(api.mock_on_calls(), 1);
+    api.mock_expire(0); assert.strictEqual(api.mock_off_calls(), 1);
+    feed(-324, 1855, -476); hold(-138, -1051, -51, 8000);
+    assert.strictEqual(api.mock_on_calls(), 1); assert.strictEqual(api.mock_state(), VIEWING);
+    hold(-58, 350, -961, 800); feed(251, -1506, 1208);
+    hold(-138, -1051, -51, 400); assert.strictEqual(api.mock_on_calls(), 2);
+  });
+  for (const [z, duration] of [[-1450, 480], [-4000, 40]]) {
     test('prolonged or severe impact cancels candidate z=' + z, () => {
       hold(15, -90, -1000, 800); hold(0, 0, z, duration);
       hold(-433, -647, -663, 2000); assert.strictEqual(raises, 0);

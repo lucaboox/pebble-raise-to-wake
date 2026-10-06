@@ -1,6 +1,7 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
+#define RTW_DETECTOR_REVISION 3
 #define RTW_CONFIRMATION_PERSIST_KEY 11 // Key 7 was the old callback batch setting.
 #define RTW_ACCEL_SAMPLING_RATE ACCEL_SAMPLING_25HZ
 #define RTW_SAMPLES_PER_CALLBACK 1
@@ -29,9 +30,9 @@
 #define RTW_GRAVITY_MIN_MG 700
 #define RTW_GRAVITY_MAX_MG 1300
 // Ignore a short acceleration burst during a raise, but never confirm on it.
-#define RTW_TRANSIENT_GRAVITY_MIN_MG 500
-#define RTW_TRANSIENT_GRAVITY_MAX_MG 1800
-#define RTW_TRANSIENT_MOTION_MAX_MS 160
+#define RTW_TRANSIENT_GRAVITY_MIN_MG 250
+#define RTW_TRANSIENT_GRAVITY_MAX_MG 2500
+#define RTW_TRANSIENT_MOTION_MAX_MS 400
 #define RTW_ROTATION_START_MG 220
 #define RTW_ROTATION_TOTAL_MG 350
 #define RTW_VIEW_PROGRESS_MG_SQUARED 10000 // Decrease in distance to viewing region.

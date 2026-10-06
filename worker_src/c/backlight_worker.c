@@ -76,7 +76,11 @@ static void handle_accel(AccelData *data, uint32_t num_samples) {
               rtw_state_name(s_detector.state), rtw_block_reason_name(s_detector.block_reason),
               sample->x, sample->y, sample->z);
       if (s_detector.state == RTW_ARMED) {
-        APP_LOG(APP_LOG_LEVEL_INFO, "RTW lowered confirmed; armed");
+        if (s_detector.block_reason == RTW_BLOCK_TIMEOUT) {
+          APP_LOG(APP_LOG_LEVEL_INFO, "RTW attempt reset; lowered reference retained");
+        } else {
+          APP_LOG(APP_LOG_LEVEL_INFO, "RTW lowered confirmed; armed");
+        }
       }
     }
 #if RTW_LOG_XYZ
@@ -142,8 +146,9 @@ static void worker_init(void) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "RTW sampling rate failed: %d", result);
     accel_data_service_unsubscribe();
   }
-  APP_LOG(APP_LOG_LEVEL_INFO, "RTW rate=%u Hz batch=%u confirm=%u duration=%lu s ambient=%d",
-          (unsigned)RTW_ACCEL_SAMPLING_RATE, RTW_SAMPLES_PER_CALLBACK, s_confirmation_samples,
+  APP_LOG(APP_LOG_LEVEL_INFO, "RTW rev=%u rate=%u Hz batch=%u confirm=%u duration=%lu s ambient=%d",
+          (unsigned)RTW_DETECTOR_REVISION, (unsigned)RTW_ACCEL_SAMPLING_RATE,
+          RTW_SAMPLES_PER_CALLBACK, s_confirmation_samples,
           (unsigned long)s_duration_seconds, s_ambient);
   if (persist_read_int(LEGACY_CALLBACK_SAMPLES) > 1) {
     APP_LOG(APP_LOG_LEVEL_INFO, "RTW legacy batching ignored; keeping one sample per callback");

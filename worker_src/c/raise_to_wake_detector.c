@@ -120,7 +120,14 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
                 distance_squared(raw, d->gravity) <= RTW_STABLE_RESIDUAL_MG * RTW_STABLE_RESIDUAL_MG;
   d->previous = raw;
   if (!gravity_valid(d->gravity)) {
-    invalidate(d, RTW_BLOCK_GRAVITY);
+    // Opposing valid gravity directions can average to nearly zero while the
+    // wrist rotates. That is a filter artefact, not loss of the lowered pose.
+    // Reseed only from a valid raw sample, and require fresh confirmation.
+    d->gravity = d->previous = raw;
+    d->view_samples = d->lower_samples = 0;
+    d->have_view_entry = false;
+    if (d->state == RTW_CONFIRMING_VIEW) d->state = RTW_ROTATING;
+    d->block_reason = RTW_BLOCK_FILTER;
     return RTW_EVENT_NONE;
   }
   bool is_lowered = outside_retained_view(raw) && outside_retained_view(d->gravity);
@@ -170,7 +177,10 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
     }
   }
   if (now - d->rotation_start_ms > RTW_ROTATION_TIMEOUT_MS) {
-    d->state = RTW_WAIT_LOWERED;
+    // This attempt has not lit the screen. Retry from the already confirmed
+    // lowered reference instead of demanding another lowering at view entry.
+    // VIEWING is handled above and can only unlock after actual lowering.
+    d->state = RTW_ARMED;
     d->view_samples = d->lower_samples = 0;
     d->have_view_entry = false;
     d->block_reason = RTW_BLOCK_TIMEOUT;
