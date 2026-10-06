@@ -1,0 +1,8 @@
+build/
+node_modules/
+.waf-*
+.lock-waf*
+*.pyc
+__pycache__/
+.DS_Store
+Thumbs.db
