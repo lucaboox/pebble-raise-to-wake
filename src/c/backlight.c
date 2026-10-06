@@ -66,7 +66,7 @@ bool ambient=false;                     /* recognize ambient light */
 
 Window *sample_window=NULL;
 TextLayer *sample_layer=NULL;
-uint samples=RTW_DEFAULT_CONFIRM_SAMPLES;
+unsigned int samples=RTW_DEFAULT_CONFIRM_SAMPLES;
 #define SAMPLE_TEXT "Viewing samples:\n3 = ~120 ms at 25 Hz"
 char sample_text[sizeof(SAMPLE_TEXT) + 10];
 
@@ -112,7 +112,7 @@ schedule_my_wakeup (time_t alarm_time,
                 __FILE__,
                 __LINE__,
                 "My wakeup - Alarm for time %u (context=%d) set with id %d",
-                (uint)alarm_time, alarm_num, (int)wake_id);
+                (unsigned int)alarm_time, alarm_num, (int)wake_id);
         if (wake_id > 0) break;
     }
 
@@ -849,41 +849,41 @@ read_alarm_data (void)
     val = persist_read_int(START_ALARM);
     if (val) {
 	start_alarm_id = (WakeupId)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "start_alarm_id=%u", (uint)val);
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "start_alarm_id=%u", (unsigned int)val);
     }
 
     val = persist_read_int(STOP_ALARM);
     if (val) {
 	stop_alarm_id = (WakeupId)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "stop_alarm_id=%u", (uint)val);
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "stop_alarm_id=%u", (unsigned int)val);
     }
 
     val = persist_read_int(START_HOUR);
     if (val) {
 	start_hour = (int)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "start_hour=%u", (uint)val);
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "start_hour=%u", (unsigned int)val);
     }
     val = persist_read_int(START_MINUTE);
     if (val) {
 	start_min = (int)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "start_min=%u", (uint)val);
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "start_min=%u", (unsigned int)val);
     }
 
     val = persist_read_int(STOP_HOUR);
     if (val) {
 	stop_hour = (int)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "stop_hour=%u", (uint)val);
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "stop_hour=%u", (unsigned int)val);
     }
     val = persist_read_int(STOP_MINUTE);
     if (val) {
 	stop_min = (int)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "stop_min=%u", (uint)val);
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "stop_min=%u", (unsigned int)val);
     }
     if (persist_exists(DURATION)) {
         val = persist_read_int(DURATION);
         if (val) {
             time_duration = (int)val;
-            APP_LOG(APP_LOG_LEVEL_DEBUG, "time_duration=%u", (uint)val);
+            APP_LOG(APP_LOG_LEVEL_DEBUG, "time_duration=%u", (unsigned int)val);
         }
     } else {
         time_duration = 5;              /* default */
@@ -893,7 +893,7 @@ read_alarm_data (void)
         val = persist_read_int(SAMPLES);
         if (val) {
             samples = (int)val;
-            APP_LOG(APP_LOG_LEVEL_DEBUG, "samples=%u", (uint)val);
+            APP_LOG(APP_LOG_LEVEL_DEBUG, "samples=%u", (unsigned int)val);
         }
     } else {
         samples = RTW_DEFAULT_CONFIRM_SAMPLES;
@@ -904,12 +904,12 @@ read_alarm_data (void)
     val = persist_read_bool(CHARGING);
     if (val) {
 	charging_mode = (bool)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "charging_mode=%u", (uint)charging_mode);
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "charging_mode=%u", (unsigned int)charging_mode);
     }
     val = persist_read_bool(PLUGGED);
     if (val) {
 	plugged_mode = (bool)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "plugged_mode=%u", (uint)plugged_mode);
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "plugged_mode=%u", (unsigned int)plugged_mode);
     }
 }
 
