@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
-#define RTW_DETECTOR_REVISION 4
+#define RTW_DETECTOR_REVISION 5
 #define RTW_CONFIRMATION_PERSIST_KEY 11 // Key 7 was the old callback batch setting.
 #define RTW_ACCEL_SAMPLING_RATE ACCEL_SAMPLING_25HZ
 #define RTW_SAMPLES_PER_CALLBACK 1

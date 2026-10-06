@@ -146,6 +146,26 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
       assert.strictEqual(raises, 1);
     });
   }
+  for (const pose of [[-91, -344, -969], [-118, -357, -909], [-71, -410, -997]]) {
+    test('small tilt after resting in typing pose does not activate ' + pose, () => {
+      hold(-69, 23, -978, 800);
+      hold(...pose, 3000);
+      // About 10-15 degrees further toward the face, then held.
+      hold(-80, -590, -800, 2000); assert.strictEqual(raises, 0);
+      // A deliberate raise from the typing pose still works.
+      hold(...pose, 800); hold(-131, -900, -420, 400);
+      assert.strictEqual(raises, 1);
+    });
+  }
+  test('slow drift into view over several seconds does not activate', () => {
+    hold(15, -90, -1000, 800);
+    for (let i = 1; i <= 150; ++i) {
+      const t = i / 150, v = [-433 * t, -90 - 557 * t, -1000 + 337 * t];
+      const scale = 1000 / Math.hypot(...v);
+      feed(...v.map(value => value * scale));
+    }
+    hold(-433, -647, -663, 1000); assert.strictEqual(raises, 0);
+  });
   test('settled lowered posture replaces stale reference before a small viewing-boundary tilt', () => {
     hold(0, 700, -714, 800);
     hold(0, -300, -954, 2000); assert.strictEqual(raises, 0);
@@ -209,8 +229,10 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
       hold(-138, -1051, -51, 4000); assert.strictEqual(raises, 1);
     });
   }
-  test('rotation timeout at viewing entry can retry without another lowering', () => {
-    lower(); hold(600, -500, -624, 1440);
+  // Stalls park well outside the viewing region. Parking right at its edge
+  // re-anchors there, so finishing from it is treated as a small tilt.
+  test('rotation timeout part-way through can retry without another lowering', () => {
+    lower(); hold(800, -300, -520, 1440);
     assert.strictEqual(raises, 0);
     const entry = now + 40;
     hold(0, -700, -714, 400);
@@ -224,7 +246,7 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     assert.strictEqual(raises, 1); assert(raisedAt - entry <= 200);
   });
   test('expired non-viewing attempts never light the screen and permit a later raise', () => {
-    lower(); hold(600, -500, -624, 6000); assert.strictEqual(raises, 0);
+    lower(); hold(800, -300, -520, 6000); assert.strictEqual(raises, 0);
     const entry = now + 40;
     hold(0, -700, -714, 400);
     assert.strictEqual(raises, 1); assert(raisedAt - entry <= 200);

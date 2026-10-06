@@ -162,9 +162,11 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
   }
 
   // A reference held from an earlier arm position exaggerates later typing
-  // tilts. Refresh only after a genuinely settled lowered window, measured
+  // tilts. Refresh after any settled window outside the viewing region (not
+  // only fully lowered: typing poses sit between the two boundaries), measured
   // against one anchor so a slow continuous raise cannot accumulate as rest.
-  if (is_lowered && stable) {
+  // Arming from WAIT_LOWERED above still requires a genuinely lowered pose.
+  if (!in_view(raw) && !in_view(d->gravity) && stable) {
     if (!d->rest_samples || distance_squared(d->gravity, d->rest_anchor) >
         RTW_REST_REFRESH_DRIFT_MG * RTW_REST_REFRESH_DRIFT_MG) {
       d->rest_anchor = d->gravity;
@@ -201,9 +203,13 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
     }
   }
   if (now - d->rotation_start_ms > RTW_ROTATION_TIMEOUT_MS) {
-    // This attempt has not lit the screen. Retry from the already confirmed
-    // lowered reference instead of demanding another lowering at view entry.
+    // This attempt has not lit the screen. Keeping the old lowered reference
+    // would let ARMED re-enter ROTATING on the very next sample, so a wrist
+    // parked near the viewing region (typing, reading a desk) would stay one
+    // small tilt away from waking. Re-anchor to the current pose instead: a
+    // later raise must again cover the full rotation from here.
     // VIEWING is handled above and can only unlock after actual lowering.
+    if (!is_view) d->resting = d->gravity;
     d->state = RTW_ARMED;
     d->view_samples = d->lower_samples = 0;
     d->have_view_entry = false;
