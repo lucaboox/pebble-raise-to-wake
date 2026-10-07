@@ -1,13 +1,13 @@
 {
   "name": "raise-to-wake",
-  "author": "raj",
+  "author": "lucaboox",
   "version": "2.4.0",
   "keywords": ["pebble-app"],
   "private": true,
   "dependencies": {},
   "pebble": {
     "displayName": "Raise to Wake",
-    "uuid": "27823a07-391e-4a69-b02d-2d8587f66b9b",
+    "uuid": "530a2032-4ba2-41f1-a566-dc5f9eecae98",
     "sdkVersion": "3",
     "targetPlatforms": [
       "aplite",

@@ -92,6 +92,18 @@ For a hardware run, turn **Logging** on and use Normal sensitivity. Lower the wr
 
 After the gesture feels good, change `RTW_ACCEL_SAMPLING_RATE` to `ACCEL_SAMPLING_10HZ` and compare. At 10 Hz, three samples span 200 ms before delivery/filter delays; two span 100 ms. Sample-count settings and filter behavior must be evaluated again; equivalent responsiveness is not assumed.
 
+## Appstore listing
+
+Assets for the [Rebble developer portal](https://dev-portal.rebble.io) are in `store/`:
+
+| File | Use |
+| --- | --- |
+| `store/icon-144x144.png`, `store/icon-48x48.png` | Large and small app icons |
+| `store/banner-720x320.png` | Marketing banner at the top of the listing |
+| `store/screenshots/` | Unframed watch screenshots, up to 5 per platform (add emery captures from the emulator) |
+
+The launcher icon on the watch is `resources/images/menu_icon.png` (colour) and `menu_icon_bw.png` (black and white): a raised fist wearing a lit watch, drawn pixel by pixel at 25×25. The app has its own UUID, separate from rajid/pebble_backlight, so the two never replace each other on a watch. Credit to the original project belongs in the listing description.
+
 ## Build, install and collect logs
 
 ### Import into CloudPebble
