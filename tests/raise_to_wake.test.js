@@ -120,6 +120,34 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
       hold(...from, 800); move(from, to); assert.strictEqual(raises, 1);
     });
   }
+  // Missed raises reported as "hit or miss" on rev 6.
+  test('raise ending at a shallower ~33 degree viewing angle lights', () => {
+    hold(-24, -49, -1001, 800); move([-24, -49, -1001], [-110, -540, -834]);
+    assert.strictEqual(raises, 1);
+  });
+  test('~25 degree raise from a half-lowered wrist lights', () => {
+    hold(-35, -227, -1040, 800); move([-35, -227, -1040], [-120, -590, -820]);
+    assert.strictEqual(raises, 1);
+  });
+  test('wrist resting just short of the viewing region can still raise into it', () => {
+    hold(15, -90, -1000, 800);
+    move([15, -90, -1000], [-106, -474, -911]); hold(-106, -474, -911, 2000);
+    move([-106, -474, -911], [-71, -963, -430]);
+    assert.strictEqual(raises, 1);
+  });
+  test('after a look, settling at a keyboard rearms for the next raise', () => {
+    hold(-24, -49, -1001, 800); move([-24, -49, -1001], [-120, -614, -822]);
+    assert.strictEqual(raises, 1);
+    move([-120, -614, -822], [-71, -410, -997]); hold(-71, -410, -997, 1000);
+    assert.strictEqual(lowers, 1, 'settled away from the screen ends the light');
+    move([-71, -410, -997], [-138, -1000, -250]);
+    assert.strictEqual(raises, 2);
+  });
+  test('looking at a slightly shallow angle after a raise keeps the light on', () => {
+    hold(-24, -49, -1001, 800); move([-24, -49, -1001], [-120, -614, -822]);
+    hold(-110, -470, -870, 3000);
+    assert.strictEqual(lowers, 0); assert.strictEqual(api.core_state(), VIEWING);
+  });
   test('rev 5 log ~23 degree re-raise from a half-lowered wrist stays dark', () => {
     hold(-35, -227, -1040, 800); move([-35, -227, -1040], [-126, -563, -840]);
     hold(-122, -575, -845, 3000); assert.strictEqual(raises, 0);
@@ -403,8 +431,9 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     assert.strictEqual(api.mock_on_calls(), 1); assert.strictEqual(api.mock_off_calls(), 1);
     assert.strictEqual(api.mock_interaction_calls(), 1);
   });
-  test('sampling-rate failure removes subscription', () => {
-    api.mock_fail_rate(-1); startWorker(); assert.strictEqual(api.mock_has_subscription(), 0);
+  test('sampling-rate failure keeps raise to wake running at the default rate', () => {
+    api.mock_fail_rate(-1); startWorker(); assert.strictEqual(api.mock_has_subscription(), 1);
+    lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
   });
   test('Sensitivity Low ignores the ~26 degree log raise that Normal accepts', () => {
     const from = [-29, -200, -991], to = [-120, -614, -822];

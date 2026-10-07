@@ -207,8 +207,10 @@ static void worker_init(void) {
   accel_data_service_subscribe(RTW_SAMPLES_PER_CALLBACK, handle_accel);
   int result = accel_service_set_sampling_rate(RTW_ACCEL_SAMPLING_RATE);
   if (result != 0) {
-    APP_LOG(APP_LOG_LEVEL_ERROR, "RTW sampling rate failed: %d", result);
-    accel_data_service_unsubscribe();
+    // Newer watches use different motion sensors. Keep the subscription at
+    // the service default (also 25 Hz) rather than silently disabling raise
+    // to wake on a watch that rejects the explicit rate.
+    APP_LOG(APP_LOG_LEVEL_WARNING, "RTW sampling rate failed: %d; using default", result);
   }
   app_worker_message_subscribe(app_message_handler);
   // Always printed once, so a log session can confirm which build is running.

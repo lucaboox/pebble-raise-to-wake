@@ -148,7 +148,24 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
     } else {
       d->lower_samples = 0;
     }
-    if (d->lower_samples >= RTW_LOWER_CONFIRM_SAMPLES) {
+    // Resting at a keyboard or desk often stays inside the wide exit region,
+    // which used to leave VIEWING stuck so the next raise was ignored. A pose
+    // settled clearly outside the viewing region for a refresh window counts
+    // as lowered too; the margin keeps a slightly shallow look lit.
+    bool away = stable &&
+                distance_to_view_squared(raw) >= RTW_REARM_VIEW_MARGIN_MG * RTW_REARM_VIEW_MARGIN_MG &&
+                distance_to_view_squared(d->gravity) >= RTW_REARM_VIEW_MARGIN_MG * RTW_REARM_VIEW_MARGIN_MG;
+    if (!away) {
+      d->rest_samples = 0;
+    } else if (!d->rest_samples || distance_squared(d->gravity, d->rest_anchor) >
+               RTW_REST_REFRESH_DRIFT_MG * RTW_REST_REFRESH_DRIFT_MG) {
+      d->rest_anchor = d->gravity;
+      d->rest_samples = 1;
+    } else if (d->rest_samples < RTW_REST_REFRESH_SAMPLES) {
+      ++d->rest_samples;
+    }
+    if (d->lower_samples >= RTW_LOWER_CONFIRM_SAMPLES ||
+        d->rest_samples >= RTW_REST_REFRESH_SAMPLES) {
       if (d->state == RTW_VIEWING) {
         // Lowering is reported promptly even if a short cooldown is still running.
         d->state = RTW_WAIT_LOWERED;
@@ -196,8 +213,14 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
   // A fixed dot product with one ideal viewing angle rejects flat-to-vertical
   // raises: Z becomes less negative as Y becomes more negative. Measure
   // progress toward the whole accepted region instead, on all three axes.
-  bool toward_view = distance_to_view_squared(d->resting) -
-                     distance_to_view_squared(d->gravity) >= RTW_VIEW_PROGRESS_MG_SQUARED;
+  // A reference resting just outside the region can never shrink its
+  // distance by the full progress amount, which blocked every raise from a
+  // wrist parked near the viewing angle. Reaching the region counts as
+  // progress then; the rotation threshold still demands a real turn.
+  int64_t rest_distance = distance_to_view_squared(d->resting);
+  int64_t view_distance = distance_to_view_squared(d->gravity);
+  bool toward_view = rest_distance - view_distance >= RTW_VIEW_PROGRESS_MG_SQUARED ||
+                     (view_distance == 0 && rest_distance > 0);
   if (d->state == RTW_ARMED) {
     // Freeze the lowered reference; following every sample would swallow slow raises.
     if (rotation >= RTW_ROTATION_START_MG * RTW_ROTATION_START_MG && toward_view) {

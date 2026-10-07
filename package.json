@@ -1,0 +1,43 @@
+{
+  "name": "raise-to-wake",
+  "author": "raj",
+  "version": "2.4.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Raise to Wake",
+    "uuid": "27823a07-391e-4a69-b02d-2d8587f66b9b",
+    "sdkVersion": "3",
+    "targetPlatforms": [
+      "aplite",
+      "basalt",
+      "chalk",
+      "diorite",
+      "emery",
+      "flint",
+      "gabbro"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "resources": {
+      "media": [
+        {
+          "type": "png",
+          "name": "IMAGE_MENU_ICON",
+          "file": "images/menu_icon.png",
+          "menuIcon": true,
+          "targetPlatforms": ["basalt", "chalk", "emery", "gabbro"]
+        },
+        {
+          "type": "png",
+          "name": "IMAGE_MENU_ICON",
+          "file": "images/menu_icon_bw.png",
+          "menuIcon": true,
+          "targetPlatforms": ["aplite", "diorite", "flint"]
+        }
+      ]
+    }
+  }
+}

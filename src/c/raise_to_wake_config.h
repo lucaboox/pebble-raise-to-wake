@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
-#define RTW_DETECTOR_REVISION 6
+#define RTW_DETECTOR_REVISION 7
 // Persistent keys shared by the app and worker. Keys 7 (old callback batch)
 // and 11 (old viewing samples) are retired; Sensitivity replaces both.
 #define RTW_DURATION_PERSIST_KEY 6
@@ -25,12 +25,12 @@
 #define RTW_SETTING_LOGGING 8
 
 // Sensitivity: how far the wrist must turn, and how long the view must hold.
-#define RTW_SENSITIVITY_HIGH 0   // ~20 degrees, 3 samples
-#define RTW_SENSITIVITY_NORMAL 1 // ~26 degrees, 3 samples
-#define RTW_SENSITIVITY_LOW 2    // ~32 degrees, 4 samples
+#define RTW_SENSITIVITY_HIGH 0   // ~19 degrees, 3 samples
+#define RTW_SENSITIVITY_NORMAL 1 // ~24 degrees, 3 samples
+#define RTW_SENSITIVITY_LOW 2    // ~30 degrees, 4 samples
 #define RTW_DEFAULT_SENSITIVITY RTW_SENSITIVITY_NORMAL
 #define RTW_SENSITIVITY_ROTATION_MG(level) \
-  ((level) == RTW_SENSITIVITY_HIGH ? 350 : (level) == RTW_SENSITIVITY_LOW ? 550 : 450)
+  ((level) == RTW_SENSITIVITY_HIGH ? 330 : (level) == RTW_SENSITIVITY_LOW ? 520 : 420)
 #define RTW_SENSITIVITY_CONFIRM_SAMPLES(level) ((level) == RTW_SENSITIVITY_LOW ? 4 : 3)
 
 #define RTW_DEFAULT_CONFIRM_SAMPLES 3
@@ -42,7 +42,10 @@
 #define RTW_VIEW_X_MIN_MG (-550)
 #define RTW_VIEW_X_MAX_MG 550
 #define RTW_VIEW_Y_MIN_MG (-1150)
-#define RTW_VIEW_Y_MAX_MG (-550) // Reject the shallow tilts seen while typing.
+// Typing tilts in the logs reach Y -410; real looks ended at -525 to -680,
+// so -550 (rev 4-6) split real looks. -530 (~32 degrees) was the best
+// trade in simulated raises vs. keyboard fidgets; below ~-525 fidgets wake.
+#define RTW_VIEW_Y_MAX_MG (-530)
 #define RTW_VIEW_Z_MIN_MG (-1100)
 #define RTW_VIEW_Z_MAX_MG 450
 
@@ -63,7 +66,7 @@
 #define RTW_TRANSIENT_MOTION_MAX_MS 400
 #define RTW_ROTATION_START_MG 220
 // Default total rotation; Sensitivity overrides it per level.
-#define RTW_ROTATION_TOTAL_MG 450 // About a 26 degree wrist turn; 350 was ~20.
+#define RTW_ROTATION_TOTAL_MG 420 // About a 24 degree wrist turn.
 #define RTW_MIN_ROTATION_TOTAL_MG 250
 #define RTW_MAX_ROTATION_TOTAL_MG 900
 #define RTW_VIEW_PROGRESS_MG_SQUARED 10000 // Decrease in distance to viewing region.
@@ -72,7 +75,10 @@
 #define RTW_LOWER_CONFIRM_SAMPLES 3
 #define RTW_REST_REFRESH_SAMPLES 8 // Refresh only after ~320 ms in a lowered pose.
 #define RTW_REST_REFRESH_DRIFT_MG 40 // Total drift from anchor, not per-sample drift.
-#define RTW_ROTATION_TIMEOUT_MS 1500
+// Settling this far outside the viewing region (e.g. back at a keyboard)
+// also ends a look and rearms, without needing the arm fully lowered.
+#define RTW_REARM_VIEW_MARGIN_MG 75
+#define RTW_ROTATION_TIMEOUT_MS 2000
 #define RTW_COOLDOWN_MS 500
 #define RTW_MAX_SAMPLE_GAP_MS 250
 #define RTW_VIBRATION_HOLDOFF_MS 200
