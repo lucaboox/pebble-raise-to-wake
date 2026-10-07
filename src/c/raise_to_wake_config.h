@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
-#define RTW_DETECTOR_REVISION 7
+#define RTW_DETECTOR_REVISION 8
 // Persistent keys shared by the app and worker. Keys 7 (old callback batch)
 // and 11 (old viewing samples) are retired; Sensitivity replaces both.
 #define RTW_DURATION_PERSIST_KEY 6
@@ -19,6 +19,10 @@
 // data1 = sensitivity, data2 = RTW_SETTING_* flags, so no restart is needed.
 #define RTW_MSG_HAND_OFF_LIGHT 1 // The user is in the app: give the light to the system.
 #define RTW_MSG_SETTINGS 2
+// App asks, worker replies with the same type: data0 = raises detected since
+// the worker started, data1 = 1 if motion data arrived since the last status
+// request, data2 = detector state.
+#define RTW_MSG_STATUS 3
 #define RTW_SETTING_CHARGING 1
 #define RTW_SETTING_PLUGGED 2
 #define RTW_SETTING_AMBIENT 4

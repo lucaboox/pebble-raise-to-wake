@@ -16,6 +16,10 @@ static uint64_t s_interaction_light_ms;
 static AppTimer *s_light_timer;
 static bool s_have_log_time;
 static uint64_t s_last_log_ms;
+// Health counters: raises for the app's status line, and samples so a stalled
+// motion stream can be noticed (per minute) and reported (per status request).
+static uint16_t s_raise_count;
+static uint32_t s_samples_since_tick, s_samples_since_status;
 
 // Formatting and queueing log lines costs battery even with no phone listening.
 #define RTW_LOG(level, ...) do { if (s_logging) APP_LOG(level, __VA_ARGS__); } while (0)
@@ -95,6 +99,8 @@ static void activate_gesture_light(uint64_t now) {
 }
 
 static void handle_accel(AccelData *data, uint32_t num_samples) {
+  s_samples_since_tick += num_samples;
+  s_samples_since_status += num_samples;
   if (s_power_light) return;
   uint64_t previous = 0;
   for (uint32_t i = 0; i < num_samples; ++i) {
@@ -131,6 +137,7 @@ static void handle_accel(AccelData *data, uint32_t num_samples) {
       s_have_log_time = true;
     }
     if (event == RTW_EVENT_RAISE) {
+      ++s_raise_count;
       activate_gesture_light(timestamp);
       RTW_LOG(APP_LOG_LEVEL_INFO, "RTW raise detected: %u samples, %lu ms from view entry",
               s_detector.required_view_samples, (unsigned long)s_detector.view_to_raise_ms);
@@ -185,7 +192,42 @@ static void app_message_handler(uint16_t type, AppWorkerMessage *message) {
     apply_settings(message->data0, message->data1, message->data2, false);
     RTW_LOG(APP_LOG_LEVEL_INFO, "RTW settings: duration=%u s sensitivity=%u flags=%u",
             message->data0, message->data1, message->data2);
+  } else if (type == RTW_MSG_STATUS) {
+    AppWorkerMessage reply = {
+      .data0 = s_raise_count,
+      .data1 = s_samples_since_status > 0,
+      .data2 = (uint16_t)s_detector.state,
+    };
+    s_samples_since_status = 0;
+    app_worker_send_message(RTW_MSG_STATUS, &reply);
   }
+}
+
+static void subscribe_accel(void) {
+  // Subscribe first: changing rate requires an active data subscription.
+  accel_data_service_subscribe(RTW_SAMPLES_PER_CALLBACK, handle_accel);
+  int result = accel_service_set_sampling_rate(RTW_ACCEL_SAMPLING_RATE);
+  if (result != 0) {
+    // Newer watches use different motion sensors. Keep the subscription at
+    // the service default (also 25 Hz) rather than silently disabling raise
+    // to wake on a watch that rejects the explicit rate.
+    APP_LOG(APP_LOG_LEVEL_WARNING, "RTW sampling rate failed: %d; using default", result);
+  }
+}
+
+// Motion data arrives about 12 times a second, so a whole minute without any
+// means the stream has stalled (firmware can reconfigure the sensor, e.g. when
+// Motion Backlight is switched). Reconnect rather than stay silently dead.
+static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
+  (void)tick_time;
+  (void)units_changed;
+  if (!s_samples_since_tick) {
+    APP_LOG(APP_LOG_LEVEL_WARNING, "RTW no motion data for a minute; reconnecting");
+    accel_data_service_unsubscribe();
+    subscribe_accel();
+    reset_detector();
+  }
+  s_samples_since_tick = 0;
 }
 
 static void worker_init(void) {
@@ -201,17 +243,12 @@ static void worker_init(void) {
                    (persist_read_bool(RTW_LOGGING_PERSIST_KEY) ? RTW_SETTING_LOGGING : 0);
   s_power_light = s_forced_gesture_light = s_interaction_light = false;
   s_have_log_time = false;
+  s_raise_count = 0;
+  s_samples_since_tick = s_samples_since_status = 0;
   apply_settings((uint32_t)duration, (unsigned)sensitivity, flags, true);
 
-  // Subscribe first: changing rate requires an active data subscription.
-  accel_data_service_subscribe(RTW_SAMPLES_PER_CALLBACK, handle_accel);
-  int result = accel_service_set_sampling_rate(RTW_ACCEL_SAMPLING_RATE);
-  if (result != 0) {
-    // Newer watches use different motion sensors. Keep the subscription at
-    // the service default (also 25 Hz) rather than silently disabling raise
-    // to wake on a watch that rejects the explicit rate.
-    APP_LOG(APP_LOG_LEVEL_WARNING, "RTW sampling rate failed: %d; using default", result);
-  }
+  subscribe_accel();
+  tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   app_worker_message_subscribe(app_message_handler);
   // Always printed once, so a log session can confirm which build is running.
   APP_LOG(APP_LOG_LEVEL_INFO, "RTW rev=%u rate=%u Hz batch=%u sensitivity=%u duration=%lu s ambient=%d log=%d",
@@ -222,6 +259,7 @@ static void worker_init(void) {
 
 static void worker_deinit(void) {
   accel_data_service_unsubscribe();
+  tick_timer_service_unsubscribe();
   app_worker_message_unsubscribe();
   if (s_charging_enabled || s_plugged_enabled) battery_state_service_unsubscribe();
   // The app stops the worker while the user is changing settings.

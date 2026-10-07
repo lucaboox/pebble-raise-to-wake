@@ -18,6 +18,9 @@ static int s_mock_rate, s_mock_batch, s_rate_error;
 static bool s_rate_after_subscribe;
 static AccelDataHandler s_mock_accel_handler;
 static AppWorkerMessageHandler s_mock_message_handler;
+static TickHandler s_mock_tick_handler;
+static AppWorkerMessage s_mock_sent;
+static int s_mock_sent_type = -1, s_mock_subscribes;
 static BatteryStateHandler s_mock_battery_handler;
 static BatteryChargeState s_mock_battery;
 static AccelData s_mock_pending[8];
@@ -33,6 +36,7 @@ void *memset(void *destination, int value, size_t count) {
   return destination;
 }
 void accel_data_service_subscribe(uint32_t count, AccelDataHandler handler) {
+  ++s_mock_subscribes;
   s_mock_batch = (int)count;
   s_mock_accel_handler = handler;
 }
@@ -42,6 +46,15 @@ bool app_worker_message_subscribe(AppWorkerMessageHandler handler) {
   return true;
 }
 bool app_worker_message_unsubscribe(void) { s_mock_message_handler = NULL; return true; }
+void app_worker_send_message(uint8_t type, AppWorkerMessage *data) {
+  s_mock_sent_type = type;
+  s_mock_sent = *data;
+}
+void tick_timer_service_subscribe(TimeUnits units, TickHandler handler) {
+  (void)units;
+  s_mock_tick_handler = handler;
+}
+void tick_timer_service_unsubscribe(void) { s_mock_tick_handler = NULL; }
 int accel_service_set_sampling_rate(AccelSamplingRate rate) {
   s_mock_rate = rate;
   s_rate_after_subscribe = s_mock_accel_handler != NULL;
@@ -88,6 +101,8 @@ void mock_reset(void) {
   s_on_calls = s_off_calls = s_interaction_calls = s_logs = 0;
   s_rate_error = 0;
   s_mock_shared_stamp = false;
+  s_mock_sent_type = -1;
+  s_mock_subscribes = 0;
   s_mock_pending_count = 0;
   s_mock_battery = (BatteryChargeState){0};
   for (unsigned i = 0; i < 16; ++i) s_persist_exists[i] = false;
@@ -114,6 +129,12 @@ void mock_app_message(int type, int data0, int data1, int data2) {
   if (s_mock_message_handler) s_mock_message_handler((uint16_t)type, &message);
 }
 int mock_battery_subscribed(void) { return s_mock_battery_handler != NULL; }
+void mock_tick(void) { if (s_mock_tick_handler) s_mock_tick_handler(NULL, MINUTE_UNIT); }
+int mock_subscribes(void) { return s_mock_subscribes; }
+int mock_sent_type(void) { return s_mock_sent_type; }
+int mock_sent_data(int field) {
+  return field == 0 ? s_mock_sent.data0 : field == 1 ? s_mock_sent.data1 : s_mock_sent.data2;
+}
 void mock_battery(int charging, int plugged) {
   s_mock_battery.is_charging = charging != 0;
   s_mock_battery.is_plugged = plugged != 0;

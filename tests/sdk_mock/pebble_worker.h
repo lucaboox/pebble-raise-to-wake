@@ -23,6 +23,12 @@ typedef void (*AppWorkerMessageHandler)(uint16_t type, AppWorkerMessage *data);
 
 bool app_worker_message_subscribe(AppWorkerMessageHandler handler);
 bool app_worker_message_unsubscribe(void);
+void app_worker_send_message(uint8_t type, AppWorkerMessage *data);
+struct tm;
+typedef enum { SECOND_UNIT = 1, MINUTE_UNIT = 2 } TimeUnits;
+typedef void (*TickHandler)(struct tm *tick_time, TimeUnits units_changed);
+void tick_timer_service_subscribe(TimeUnits units, TickHandler handler);
+void tick_timer_service_unsubscribe(void);
 
 void accel_data_service_subscribe(uint32_t count, AccelDataHandler handler);
 void accel_data_service_unsubscribe(void);

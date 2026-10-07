@@ -33,6 +33,9 @@ static MenuLayer *s_menu;
 static AppTimer *s_refresh_timer;
 
 static bool s_worker_on, s_ambient, s_logging, s_charging, s_plugged, s_schedule;
+// Live status from the worker; -1 until the first reply arrives.
+static int s_raise_count = -1;
+static bool s_motion_ok = true;
 static int s_duration = RTW_DEFAULT_LIGHT_DURATION_SECONDS;
 static int s_sensitivity = RTW_DEFAULT_SENSITIVITY;
 static int s_start_hour = 7, s_start_min = 0, s_stop_hour = 23, s_stop_min = 0;
@@ -361,7 +364,20 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *c
 
   switch (row_at(index)) {
     case ROW_ENABLED:
-      title = "Enabled"; subtitle = "Light on raise"; toggle = s_worker_on;
+      title = "Enabled"; toggle = s_worker_on;
+      // Live status: tells "not detected" (count stays) from "detected but
+      // the light sensor kept it dark" (count rises), and spots a dead stream.
+      if (!s_worker_on) {
+        subtitle = "Off";
+      } else if (s_raise_count < 0) {
+        subtitle = "Running";
+      } else if (!s_motion_ok) {
+        subtitle = "No motion data";
+      } else {
+        snprintf(value, sizeof(value), s_raise_count == 1 ? "%d raise detected" :
+                 "%d raises detected", s_raise_count);
+        subtitle = value;
+      }
       break;
     case ROW_SENSITIVITY:
       title = "Sensitivity"; subtitle = s_sensitivity_names[s_sensitivity];
@@ -485,10 +501,24 @@ static void select_click(MenuLayer *menu, MenuIndex *index, void *context) {
   menu_layer_reload_data(menu);
 }
 
-static void refresh_worker_state(void *context) {
-  s_refresh_timer = NULL;
-  s_worker_on = app_worker_is_running();
+static void worker_message(uint16_t type, AppWorkerMessage *data) {
+  if (type != RTW_MSG_STATUS) return;
+  s_raise_count = data->data0;
+  s_motion_ok = data->data1;
   menu_layer_reload_data(s_menu);
+}
+
+// While the menu is showing, poll the worker every 2 s for the status line.
+static void refresh_worker_state(void *context) {
+  s_worker_on = app_worker_is_running();
+  if (s_worker_on) {
+    AppWorkerMessage message = {0};
+    app_worker_send_message(RTW_MSG_STATUS, &message);
+  } else {
+    s_raise_count = -1;
+  }
+  menu_layer_reload_data(s_menu);
+  s_refresh_timer = app_timer_register(2000, refresh_worker_state, NULL);
 }
 
 static void window_load(Window *window) {
@@ -507,6 +537,7 @@ static void window_load(Window *window) {
   menu_layer_set_highlight_colors(s_menu, ACCENT, ACCENT_TEXT);
   menu_layer_set_click_config_onto_window(s_menu, window);
   layer_add_child(root, menu_layer_get_layer(s_menu));
+  app_worker_message_subscribe(worker_message);
 }
 
 static void window_appear(Window *window) {
@@ -518,9 +549,14 @@ static void window_appear(Window *window) {
   s_refresh_timer = app_timer_register(1000, refresh_worker_state, NULL);
 }
 
-static void window_unload(Window *window) {
+static void window_disappear(Window *window) {
   if (s_refresh_timer) app_timer_cancel(s_refresh_timer);
   s_refresh_timer = NULL;
+}
+
+static void window_unload(Window *window) {
+  window_disappear(window);
+  app_worker_message_unsubscribe();
   menu_layer_destroy(s_menu);
 }
 
@@ -565,6 +601,7 @@ int main(void) {
   window_set_window_handlers(s_window, (WindowHandlers) {
     .load = window_load,
     .appear = window_appear,
+    .disappear = window_disappear,
     .unload = window_unload,
   });
   window_stack_push(s_window, true);

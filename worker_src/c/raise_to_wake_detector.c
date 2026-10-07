@@ -238,7 +238,9 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
     // small tilt away from waking. Re-anchor to the current pose instead: a
     // later raise must again cover the full rotation from here.
     // VIEWING is handled above and can only unlock after actual lowering.
-    if (!is_view) d->resting = d->gravity;
+    // Only ever anchor outside the region: a reference inside it can never
+    // make progress, so raises would stay blocked until a full lowering.
+    if (!in_view(d->gravity)) d->resting = d->gravity;
     d->state = RTW_ARMED;
     d->view_samples = d->lower_samples = 0;
     d->have_view_entry = false;

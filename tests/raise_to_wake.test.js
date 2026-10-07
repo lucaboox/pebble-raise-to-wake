@@ -460,6 +460,24 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     assert.strictEqual(api.mock_battery_subscribed(), 0);
     assert.strictEqual(api.mock_off_calls(), 2, 'disabling releases the charger light');
   });
+  test('a stalled motion stream is reconnected within a minute and raises work again', () => {
+    startWorker(); assert.strictEqual(api.mock_subscribes(), 1);
+    lower(); api.mock_tick(); assert.strictEqual(api.mock_subscribes(), 1, 'data flowing: no reconnect');
+    api.mock_tick(); assert.strictEqual(api.mock_subscribes(), 2, 'no data for a minute: reconnect');
+    lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
+  });
+  test('status reply reports raises, motion data and state to the app', () => {
+    startWorker(); lower(); raise();
+    api.mock_app_message(3, 0, 0, 0);
+    assert.strictEqual(api.mock_sent_type(), 3);
+    assert.strictEqual(api.mock_sent_data(0), 1, 'one raise');
+    assert.strictEqual(api.mock_sent_data(1), 1, 'motion data arrived');
+    assert.strictEqual(api.mock_sent_data(2), VIEWING);
+    api.mock_app_message(3, 0, 0, 0);
+    assert.strictEqual(api.mock_sent_data(1), 0, 'nothing since the last request');
+    lower(); raise(); api.mock_app_message(3, 0, 0, 0);
+    assert.strictEqual(api.mock_sent_data(0), 2); assert.strictEqual(api.mock_sent_data(1), 1);
+  });
   test('invalid stored settings fall back to defaults', () => {
     startWorker({6: 999, 13: 7}); lower(); raise();
     assert.strictEqual(api.mock_on_calls(), 1); assert.strictEqual(api.mock_timer_duration(0), 5000);
