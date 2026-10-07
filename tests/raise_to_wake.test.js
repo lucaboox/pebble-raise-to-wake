@@ -21,9 +21,9 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
   const api = instance.exports;
   const WAIT = 0, ARMED = 1, VIEWING = 4, RAISE = 1, LOWER = 2;
   let now, raises, lowers, worker, tests = 0, raisedAt;
-  function reset(confirmations = 3) {
+  function reset(confirmations = 3, rotation = 0) {
     now = 0; raises = 0; lowers = 0; raisedAt = 0; worker = false;
-    api.core_init(confirmations);
+    api.core_init(confirmations, rotation);
     api.mock_reset();
   }
   function feed(x, y, z, vibrated = false, interval = 40) {
@@ -102,6 +102,28 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
       hold(...pose, 3000); assert.strictEqual(raises, 1);
     });
   }
+  function move(from, to, duration = 400) {
+    const count = Math.ceil(duration / 40);
+    for (let i = 1; i <= count; ++i) {
+      const v = from.map((value, axis) => value + (to[axis] - value) * i / count);
+      const scale = Math.hypot(...to) / Math.hypot(...v);
+      feed(...v.map(value => value * scale));
+    }
+    hold(...to, 400);
+  }
+  // Rev 5 Pebble Time log: rest pose -> settled viewing pose of each raise.
+  for (const [from, to] of [[[-24, -49, -1001], [-123, -598, -812]],
+                            [[6, -17, -1000], [-142, -683, -744]],
+                            [[11, -96, -1059], [-114, -654, -799]],
+                            [[0, -93, -996], [-194, -918, -287]]]) {
+    test('rev 5 log raise still lights ' + to, () => {
+      hold(...from, 800); move(from, to); assert.strictEqual(raises, 1);
+    });
+  }
+  test('rev 5 log ~23 degree re-raise from a half-lowered wrist stays dark', () => {
+    hold(-35, -227, -1040, 800); move([-35, -227, -1040], [-126, -563, -840]);
+    hold(-122, -575, -845, 3000); assert.strictEqual(raises, 0);
+  });
   test('startup in log-derived tilted viewing pose waits for lowering', () => {
     hold(-433, -647, -663, 3000);
     assert.strictEqual(raises, 0); assert.strictEqual(api.core_state(), WAIT);
@@ -300,12 +322,39 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     reset(99); lower(); raise(); assert.strictEqual(raises, 1);
   });
   test('worker subscribes before setting 25 Hz, ignores old batch preference', () => {
-    startWorker({7: 20}); assert.strictEqual(api.mock_rate(), 25);
-    assert.strictEqual(api.mock_batch(), 1); assert.strictEqual(api.mock_rate_order(), 1);
+    startWorker({7: 20, 12: 1}); assert.strictEqual(api.mock_rate(), 25);
+    assert.strictEqual(api.mock_batch(), 2); assert.strictEqual(api.mock_rate_order(), 1);
     lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
     assert.strictEqual(api.mock_timer_duration(0), 5000);
     hold(0, -700, -714, 8000); assert.strictEqual(api.mock_on_calls(), 1);
+    assert(api.mock_logs() > 5, 'debug logging setting should log');
     assert(api.mock_logs() < 30, 'logging should not happen per sample');
+  });
+  test('logging is off by default apart from one startup line', () => {
+    startWorker(); lower(); raise(); hold(0, -700, -714, 8000); lower();
+    assert.strictEqual(api.mock_on_calls(), 1); assert.strictEqual(api.mock_logs(), 1);
+  });
+  test('batched samples sharing one timestamp still detect a raise', () => {
+    api.mock_shared_stamp(1); startWorker(); lower(); raise();
+    assert.strictEqual(api.mock_on_calls(), 1); assert.strictEqual(api.mock_state(), VIEWING);
+  });
+  test('app hand-off gives the gesture light to the system, so a timer cannot cut it', () => {
+    startWorker(); lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
+    api.mock_app_message(1, 0, 0, 0);
+    assert.strictEqual(api.mock_off_calls(), 1); assert.strictEqual(api.mock_interaction_calls(), 1);
+    api.mock_expire(0); assert.strictEqual(api.mock_off_calls(), 1);
+    // Still VIEWING: holding the wrist up does not relight, lowering does not cut.
+    hold(0, -700, -714, 2000); lower();
+    assert.strictEqual(api.mock_on_calls(), 1); assert.strictEqual(api.mock_off_calls(), 1);
+    raise(); assert.strictEqual(api.mock_on_calls(), 2);
+  });
+  test('stopping the worker mid-gesture hands off instead of cutting the light', () => {
+    startWorker(); lower(); raise(); api.mock_stop();
+    assert.strictEqual(api.mock_interaction_calls(), 1);
+  });
+  test('hand-off without a gesture light leaves the backlight alone', () => {
+    startWorker(); api.mock_app_message(1, 0, 0, 0);
+    assert.strictEqual(api.mock_off_calls(), 0); assert.strictEqual(api.mock_interaction_calls(), 0);
   });
   test('timer expiry releases light without retriggering while viewing', () => {
     startWorker({6: 2}); lower(); raise(); api.mock_expire(0);
@@ -319,11 +368,19 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     assert.strictEqual(api.mock_off_calls(), offCalls);
     api.mock_expire(1); assert.strictEqual(api.mock_off_calls(), offCalls + 1);
   });
-  test('ambient mode uses interaction and never forces off on lowering', () => {
+  test('light sensor mode: lowering soon after the raise ends the light', () => {
     startWorker({10: 1}); lower(); raise(); lower();
     assert.strictEqual(api.mock_interaction_calls(), 1);
-    assert.strictEqual(api.mock_on_calls(), 0); assert.strictEqual(api.mock_off_calls(), 0);
+    assert.strictEqual(api.mock_on_calls(), 0); assert.strictEqual(api.mock_off_calls(), 1);
     assert.strictEqual(api.mock_timer_count(), 0);
+  });
+  test('light sensor mode: a much later lowering leaves the light alone', () => {
+    startWorker({10: 1}); lower(); raise(); hold(0, -700, -714, 12000); lower();
+    assert.strictEqual(api.mock_interaction_calls(), 1); assert.strictEqual(api.mock_off_calls(), 0);
+  });
+  test('light sensor mode: after an app hand-off, lowering leaves the light alone', () => {
+    startWorker({10: 1}); lower(); raise(); api.mock_app_message(1, 0, 0, 0); lower();
+    assert.strictEqual(api.mock_off_calls(), 0);
   });
   test('zero duration retains light until confirmed lowering', () => {
     startWorker({6: 0}); lower(); raise(); assert.strictEqual(api.mock_timer_count(), 0);
@@ -348,6 +405,35 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
   });
   test('sampling-rate failure removes subscription', () => {
     api.mock_fail_rate(-1); startWorker(); assert.strictEqual(api.mock_has_subscription(), 0);
+  });
+  test('Sensitivity Low ignores the ~26 degree log raise that Normal accepts', () => {
+    const from = [-29, -200, -991], to = [-120, -614, -822];
+    startWorker(); hold(...from, 800); move(from, to);
+    assert.strictEqual(api.mock_on_calls(), 1);
+    reset(); startWorker({13: 2}); hold(...from, 800); move(from, to);
+    assert.strictEqual(api.mock_on_calls(), 0);
+    hold(15, -90, -1000, 800); move([15, -90, -1000], [-142, -683, -744]);
+    assert.strictEqual(api.mock_on_calls(), 1);
+  });
+  test('Sensitivity High lights on a ~23 degree re-raise', () => {
+    startWorker({13: 0}); hold(-35, -227, -1040, 800); move([-35, -227, -1040], [-126, -563, -840]);
+    assert.strictEqual(api.mock_on_calls(), 1);
+  });
+  test('settings message applies live without a restart', () => {
+    startWorker(); lower(); raise(); assert.strictEqual(api.mock_timer_duration(0), 5000);
+    // Duration 10 s, logging on, charger light while plugged in.
+    api.mock_app_message(2, 10, 1, 2 | 8);
+    assert.strictEqual(api.mock_battery_subscribed(), 1);
+    assert.strictEqual(api.mock_state(), VIEWING, 'same sensitivity keeps gesture state');
+    lower(); raise(); assert.strictEqual(api.mock_timer_duration(1), 10000);
+    api.mock_battery(0, 1); assert.strictEqual(api.mock_on_calls(), 3);
+    api.mock_app_message(2, 10, 1, 0);
+    assert.strictEqual(api.mock_battery_subscribed(), 0);
+    assert.strictEqual(api.mock_off_calls(), 2, 'disabling releases the charger light');
+  });
+  test('invalid stored settings fall back to defaults', () => {
+    startWorker({6: 999, 13: 7}); lower(); raise();
+    assert.strictEqual(api.mock_on_calls(), 1); assert.strictEqual(api.mock_timer_duration(0), 5000);
   });
   console.log('\n' + tests + ' checks passed. Pebble SDK build and real-wrist validation remain separate.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

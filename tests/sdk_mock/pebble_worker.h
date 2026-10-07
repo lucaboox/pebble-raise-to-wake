@@ -18,6 +18,11 @@ typedef struct {
 typedef void (*BatteryStateHandler)(BatteryChargeState);
 typedef struct AppTimer AppTimer;
 typedef void (*AppTimerCallback)(void *);
+typedef struct { uint16_t data0, data1, data2; } AppWorkerMessage;
+typedef void (*AppWorkerMessageHandler)(uint16_t type, AppWorkerMessage *data);
+
+bool app_worker_message_subscribe(AppWorkerMessageHandler handler);
+bool app_worker_message_unsubscribe(void);
 
 void accel_data_service_subscribe(uint32_t count, AccelDataHandler handler);
 void accel_data_service_unsubscribe(void);

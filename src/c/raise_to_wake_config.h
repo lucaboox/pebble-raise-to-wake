@@ -1,10 +1,38 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
-#define RTW_DETECTOR_REVISION 5
-#define RTW_CONFIRMATION_PERSIST_KEY 11 // Key 7 was the old callback batch setting.
+#define RTW_DETECTOR_REVISION 6
+// Persistent keys shared by the app and worker. Keys 7 (old callback batch)
+// and 11 (old viewing samples) are retired; Sensitivity replaces both.
+#define RTW_DURATION_PERSIST_KEY 6
+#define RTW_CHARGING_PERSIST_KEY 8
+#define RTW_PLUGGED_PERSIST_KEY 9
+#define RTW_AMBIENT_PERSIST_KEY 10
+#define RTW_LOGGING_PERSIST_KEY 12 // Debug logging; off unless enabled in the app.
+#define RTW_SENSITIVITY_PERSIST_KEY 13
 #define RTW_ACCEL_SAMPLING_RATE ACCEL_SAMPLING_25HZ
-#define RTW_SAMPLES_PER_CALLBACK 1
+#define RTW_SAMPLE_INTERVAL_MS 40 // Must match RTW_ACCEL_SAMPLING_RATE.
+// Two samples per callback halves worker wake-ups for at most 40 ms delivery delay.
+#define RTW_SAMPLES_PER_CALLBACK 2
+
+// App -> worker messages. Settings arrive as data0 = light seconds,
+// data1 = sensitivity, data2 = RTW_SETTING_* flags, so no restart is needed.
+#define RTW_MSG_HAND_OFF_LIGHT 1 // The user is in the app: give the light to the system.
+#define RTW_MSG_SETTINGS 2
+#define RTW_SETTING_CHARGING 1
+#define RTW_SETTING_PLUGGED 2
+#define RTW_SETTING_AMBIENT 4
+#define RTW_SETTING_LOGGING 8
+
+// Sensitivity: how far the wrist must turn, and how long the view must hold.
+#define RTW_SENSITIVITY_HIGH 0   // ~20 degrees, 3 samples
+#define RTW_SENSITIVITY_NORMAL 1 // ~26 degrees, 3 samples
+#define RTW_SENSITIVITY_LOW 2    // ~32 degrees, 4 samples
+#define RTW_DEFAULT_SENSITIVITY RTW_SENSITIVITY_NORMAL
+#define RTW_SENSITIVITY_ROTATION_MG(level) \
+  ((level) == RTW_SENSITIVITY_HIGH ? 350 : (level) == RTW_SENSITIVITY_LOW ? 550 : 450)
+#define RTW_SENSITIVITY_CONFIRM_SAMPLES(level) ((level) == RTW_SENSITIVITY_LOW ? 4 : 3)
+
 #define RTW_DEFAULT_CONFIRM_SAMPLES 3
 #define RTW_MIN_CONFIRM_SAMPLES 2
 #define RTW_MAX_CONFIRM_SAMPLES 10
@@ -34,7 +62,10 @@
 #define RTW_TRANSIENT_GRAVITY_MAX_MG 2500
 #define RTW_TRANSIENT_MOTION_MAX_MS 400
 #define RTW_ROTATION_START_MG 220
-#define RTW_ROTATION_TOTAL_MG 350
+// Default total rotation; Sensitivity overrides it per level.
+#define RTW_ROTATION_TOTAL_MG 450 // About a 26 degree wrist turn; 350 was ~20.
+#define RTW_MIN_ROTATION_TOTAL_MG 250
+#define RTW_MAX_ROTATION_TOTAL_MG 900
 #define RTW_VIEW_PROGRESS_MG_SQUARED 10000 // Decrease in distance to viewing region.
 #define RTW_STABLE_DELTA_MG 140
 #define RTW_STABLE_RESIDUAL_MG 180
@@ -46,7 +77,8 @@
 #define RTW_MAX_SAMPLE_GAP_MS 250
 #define RTW_VIBRATION_HOLDOFF_MS 200
 
+// Light sensor mode: lowering within this long of the raise ends the light.
+#define RTW_INTERACTION_RELEASE_MS 10000
 #define RTW_DEFAULT_LIGHT_DURATION_SECONDS 5
 #define RTW_MAX_LIGHT_DURATION_SECONDS 60
-#define RTW_LOG_XYZ 1
-#define RTW_XYZ_LOG_INTERVAL_MS 1000
+#define RTW_XYZ_LOG_INTERVAL_MS 1000 // Only when debug logging is enabled.

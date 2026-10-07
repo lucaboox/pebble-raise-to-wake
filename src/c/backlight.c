@@ -1,973 +1,574 @@
 #include <pebble.h>
 #include "raise_to_wake_config.h"
 
-#define START_HOUR	0
-#define START_MINUTE	1
-#define STOP_HOUR	2
-#define STOP_MINUTE	3
-#define START_ALARM	4
-#define STOP_ALARM	5
-#define DURATION	6
-#define SAMPLES		RTW_CONFIRMATION_PERSIST_KEY
-#define CHARGING	8
-#define PLUGGED		9
-#define AMBIENT		10
+// Persistent keys used only by the app. Shared keys are in the config header.
+#define START_HOUR    0
+#define START_MINUTE  1
+#define STOP_HOUR     2
+#define STOP_MINUTE   3
+#define SCHEDULE      14
+#define STARTED_ONCE  15 // Set after the first launch has started the worker.
 
-/* Screen size info */
-#if defined(PBL_RECT)
-#define SCREEN_WIDTH 144
-#define SCREEN_HEIGHT 168
-#elif defined(PBL_ROUND)
-#define SCREEN_WIDTH 180
-#define SCREEN_HEIGHT 180
+#define TIME_START 0 // Wakeup cookies; the worker is started / stopped at these.
+#define TIME_STOP  1
+
+#define MINUTES 60
+#define HOURS   (60 * MINUTES)
+#define DAYS    (24 * HOURS)
+
+#ifdef PBL_COLOR
+#define ACCENT GColorChromeYellow
+#define ACCENT_TEXT GColorBlack
+#else
+#define ACCENT GColorBlack
+#define ACCENT_TEXT GColorWhite
 #endif
 
-#define SECONDS (1)
-#define MINUTES (60 * SECONDS)
-#define HOURS (60 * MINUTES)
-#define DAYS (24 * HOURS)
+static const uint8_t s_durations[] = {3, 5, 8, 10, 15, 30, 0}; // 0 = until lowered
+static const char *s_sensitivity_names[] = {"High", "Normal", "Low"};
+static const char *s_charger_names[] = {"Off", "While charging", "Plugged in"};
 
-static Window *window;
-static TextLayer *text_layer=NULL;
+static Window *s_window;
+static MenuLayer *s_menu;
+static AppTimer *s_refresh_timer;
 
-GFont my_font;
-#define FONT_HEIGHT 30
-#define FONT_WIDTH 30
-
-static Window *top_menu_window=NULL;
-SimpleMenuLayer *top_menu_layer=NULL;
-
-Window *time_window=NULL;
-TextLayer *time_layer=NULL;
-Layer *line_layer=NULL;
-
-char initial_text[]="Backlight:\nUp - enable\nMiddle - menu\nDown - disable";
-
-char time_select_text[30];		/* hours : minutes */
-int time_select_pointer;
-#define TIME_SELECT_HOURS 1
-#define TIME_SELECT_MINUTES 2
-int time_select_hours;
-int time_select_minutes;
-int time_setting;
-#define TIME_START	0
-#define TIME_STOP	1
-char *which[2]={"start", "stop"};
-int start_hour;
-int start_min;
-int stop_hour;
-int stop_min;
-int time_duration;
-WakeupId start_alarm_id;
-WakeupId stop_alarm_id;
-bool charging_mode=false;               /* on while charging mode */
-bool plugged_mode=false;                /* on while plugged in mode */
-bool ambient=false;                     /* recognize ambient light */
-
-Window *sample_window=NULL;
-TextLayer *sample_layer=NULL;
-unsigned int samples=RTW_DEFAULT_CONFIRM_SAMPLES;
-#define SAMPLE_TEXT "Viewing samples:\n3 = ~120 ms at 25 Hz"
-char sample_text[sizeof(SAMPLE_TEXT) + 10];
-
-/*
- * Main window menu
- */
-void top_menu_callback(int index, void *context);
-const SimpleMenuItem top_menu_items[]={
-    {"Toggle backlight", NULL, NULL, (SimpleMenuLayerSelectCallback)top_menu_callback},
-    {"Enable time", NULL, NULL, (SimpleMenuLayerSelectCallback)top_menu_callback},
-    {"Disable time", NULL, NULL, (SimpleMenuLayerSelectCallback)top_menu_callback},
-    {"Set Timeout", NULL, NULL, (SimpleMenuLayerSelectCallback)top_menu_callback},
-    {"Clear times", NULL, NULL, (SimpleMenuLayerSelectCallback)top_menu_callback},
-    {"Viewing samples", NULL, NULL, (SimpleMenuLayerSelectCallback)top_menu_callback},
-    {"Charging light", NULL, NULL, (SimpleMenuLayerSelectCallback)top_menu_callback},
-    {"Powered light", NULL, NULL, (SimpleMenuLayerSelectCallback)top_menu_callback},
-    {"Use light sensor", NULL, NULL, (SimpleMenuLayerSelectCallback)top_menu_callback},
-};
-#define num_top_menu_items (sizeof(top_menu_items) / sizeof(*top_menu_items))
-
-const SimpleMenuSection top_menu_sections={.title="Main menu", .items=top_menu_items,
-					   .num_items=num_top_menu_items};
-#define num_top_menu_sections 1
+static bool s_worker_on, s_ambient, s_logging, s_charging, s_plugged, s_schedule;
+static int s_duration = RTW_DEFAULT_LIGHT_DURATION_SECONDS;
+static int s_sensitivity = RTW_DEFAULT_SENSITIVITY;
+static int s_start_hour = 7, s_start_min = 0, s_stop_hour = 23, s_stop_min = 0;
 
 
 /****************************************************************************
- * Setting start and stop times
+ * Settings and the background worker
  ****************************************************************************/
 
-
-WakeupId
-schedule_my_wakeup (time_t alarm_time,
-                    int alarm_num)
-{
-    WakeupId wake_id;
-
-    /* Schedule a new (snooze) wakeup */
-    for (wake_id = E_RANGE ; wake_id == E_RANGE ; alarm_time -= (1 * MINUTES)) {
-        wake_id = wakeup_schedule(alarm_time,
-                                  alarm_num,
-                                  true);
-        app_log(APP_LOG_LEVEL_WARNING,
-                __FILE__,
-                __LINE__,
-                "My wakeup - Alarm for time %u (context=%d) set with id %d",
-                (unsigned int)alarm_time, alarm_num, (int)wake_id);
-        if (wake_id > 0) break;
-    }
-
-    return(wake_id);
+static int read_int(uint32_t key, int fallback) {
+  return persist_exists(key) ? (int)persist_read_int(key) : fallback;
 }
 
-
-void
-schedule_wakeup (WakeupId *alarm_id,
-		 int hour, int min,
-		 int which, int which_mem)
-{
-    time_t now;
-    struct tm *now_tick;
-    time_t alarm_time;
-    int32_t time_inc;
-
-    now = time(0L);
-    now_tick = localtime(&now);
-
-    wakeup_cancel(*alarm_id);
-    time_inc = ((hour - now_tick->tm_hour) * HOURS) +
-	((min - now_tick->tm_min) * MINUTES) -
-	now_tick->tm_sec;
-
-    if (time_inc < 0) {
-        /* place it back into the future */
-        time_inc += 1 * DAYS;
-    }
-    app_log(APP_LOG_LEVEL_WARNING,
-	    __FILE__,
-	    __LINE__,
-	    "time increment is %d", (int)time_inc);
-
-    alarm_time = now + time_inc;
-
-    /* If the choosen alarm time is taken, make it a minute
-       earlier until it works */
-    for (*alarm_id = E_RANGE ; *alarm_id == E_RANGE ;
-         alarm_time -= (1 * MINUTES)) {
-        *alarm_id = schedule_my_wakeup(alarm_time, which);
-        app_log(APP_LOG_LEVEL_WARNING,
-                __FILE__,
-                __LINE__,
-                "wakeup_schedule returned %d", (int)*alarm_id);
-    }
-
-    persist_write_int(which_mem, (uint32_t)(*alarm_id));
+static void load_settings(void) {
+  s_duration = read_int(RTW_DURATION_PERSIST_KEY, RTW_DEFAULT_LIGHT_DURATION_SECONDS);
+  if (s_duration < 0 || s_duration > RTW_MAX_LIGHT_DURATION_SECONDS) {
+    s_duration = RTW_DEFAULT_LIGHT_DURATION_SECONDS;
+  }
+  s_sensitivity = read_int(RTW_SENSITIVITY_PERSIST_KEY, RTW_DEFAULT_SENSITIVITY);
+  if (s_sensitivity < RTW_SENSITIVITY_HIGH || s_sensitivity > RTW_SENSITIVITY_LOW) {
+    s_sensitivity = RTW_DEFAULT_SENSITIVITY;
+  }
+  s_charging = persist_read_bool(RTW_CHARGING_PERSIST_KEY);
+  s_plugged = persist_read_bool(RTW_PLUGGED_PERSIST_KEY);
+  s_ambient = persist_read_bool(RTW_AMBIENT_PERSIST_KEY);
+  s_logging = persist_read_bool(RTW_LOGGING_PERSIST_KEY);
+  s_schedule = persist_read_bool(SCHEDULE);
+  s_start_hour = read_int(START_HOUR, 7) % 24;
+  s_start_min = read_int(START_MINUTE, 0) % 60;
+  s_stop_hour = read_int(STOP_HOUR, 23) % 24;
+  s_stop_min = read_int(STOP_MINUTE, 0) % 60;
 }
 
-
-void
-save_and_initiate_timer (int which)
-{
-
-
-    if (which == TIME_START) {
-	persist_write_int(START_HOUR, (uint32_t)start_hour);
-	persist_write_int(START_MINUTE, (uint32_t)start_min);
-
-	schedule_wakeup(&start_alarm_id, start_hour, start_min, TIME_START, START_ALARM);
-    } else { /* TIME_STOP */
-	persist_write_int(STOP_HOUR, (uint32_t)stop_hour);
-	persist_write_int(STOP_MINUTE, (uint32_t)stop_min);
-
-	schedule_wakeup(&stop_alarm_id, stop_hour, stop_min, TIME_STOP, STOP_ALARM);
-    }
+// A running worker picks settings up immediately; a stopped one reads storage.
+static void send_settings(void) {
+  if (!app_worker_is_running()) return;
+  AppWorkerMessage message = {
+    .data0 = (uint16_t)s_duration,
+    .data1 = (uint16_t)s_sensitivity,
+    .data2 = (s_charging ? RTW_SETTING_CHARGING : 0) | (s_plugged ? RTW_SETTING_PLUGGED : 0) |
+             (s_ambient ? RTW_SETTING_AMBIENT : 0) | (s_logging ? RTW_SETTING_LOGGING : 0),
+  };
+  app_worker_send_message(RTW_MSG_SETTINGS, &message);
 }
 
-
-void
-format_time (void)
-{
-
-    snprintf(time_select_text, sizeof(time_select_text),
-	     "Setting\n%s\n%02u:%02u",
-	     which[time_setting],
-	     time_select_hours,
-	     time_select_minutes);
+// The user is pressing buttons here, so the worker must not switch off a
+// raise-to-wake light on its own timer; it hands the light to the system.
+static void hand_off_light(void) {
+  if (!app_worker_is_running()) return;
+  AppWorkerMessage message = {0};
+  app_worker_send_message(RTW_MSG_HAND_OFF_LIGHT, &message);
 }
 
-
-
-static void
-select_time_handler(ClickRecognizerRef recognizer, void *context) {
-
-    app_log(APP_LOG_LEVEL_WARNING,
-	    __FILE__,
-	    __LINE__,
-	    "Time Click select");
-
-    if (time_select_pointer == TIME_SELECT_HOURS) {
-	time_select_pointer = TIME_SELECT_MINUTES;
-        layer_mark_dirty(line_layer);
-    } else {
-	app_log(APP_LOG_LEVEL_WARNING,
-		__FILE__,
-		__LINE__,
-		"Time selected is '%s'", time_select_text);
-
-	if (time_setting == TIME_START) {
-	    start_hour = time_select_hours;
-	    start_min = time_select_minutes;
-
-	    save_and_initiate_timer(TIME_START);
-	} else {
-	    stop_hour = time_select_hours;
-	    stop_min = time_select_minutes;
-
-	    save_and_initiate_timer(TIME_STOP);
-	}
-
-	window_stack_pop(true);
-    }
-}
-
-static void
-up_time_handler(ClickRecognizerRef recognizer, void *context) {
-
-    if (time_select_pointer == TIME_SELECT_HOURS) {
-	time_select_hours++;
-	if (time_select_hours > 23)
-	    time_select_hours = 0;
-	else if (time_select_hours < 0)
-	    time_select_hours = 23;
-    } else {
-	time_select_minutes++;
-	if (time_select_minutes > 59)
-	    time_select_minutes = 0;
-	else if (time_select_minutes < 0)
-	    time_select_minutes = 59;
-    }
-
-    format_time();
-    text_layer_set_text(time_layer, time_select_text);
-}
-
-static void
-down_time_handler(ClickRecognizerRef recognizer, void *context) {
-
-    if (time_select_pointer == TIME_SELECT_HOURS) {
-	time_select_hours--;
-	if (time_select_hours > 23)
-	    time_select_hours = 0;
-	else if (time_select_hours < 0)
-	    time_select_hours = 23;
-    } else {
-	time_select_minutes--;
-	if (time_select_minutes > 59)
-	    time_select_minutes = 0;
-	else if (time_select_minutes < 0)
-	    time_select_minutes = 59;
-    }
-
-    format_time();
-    text_layer_set_text(time_layer, time_select_text);
-}
-
-static void
-time_config_provider(void *context) {
-
-  window_single_click_subscribe(BUTTON_ID_SELECT, select_time_handler);
-  window_single_click_subscribe(BUTTON_ID_UP, up_time_handler);
-  window_single_click_subscribe(BUTTON_ID_DOWN, down_time_handler);
-
-  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, up_time_handler);
-  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, down_time_handler);
-}
-
-void
-line_update_proc (struct Layer *layer, GContext* ctx)
-{
-
-    if (time_select_pointer == TIME_SELECT_HOURS) {
-        graphics_draw_line(ctx, GPoint((SCREEN_WIDTH/2)-22, 0),
-                           GPoint((SCREEN_WIDTH/2)-2, 0));
-        graphics_draw_line(ctx, GPoint((SCREEN_WIDTH/2)-22, 1),
-                           GPoint((SCREEN_WIDTH/2)-2, 1));
-        graphics_draw_line(ctx, GPoint((SCREEN_WIDTH/2)-22, 2),
-                           GPoint((SCREEN_WIDTH/2)-2, 2));
-    } else {
-        graphics_draw_line(ctx, GPoint((SCREEN_WIDTH/2)+2, 0),
-                           GPoint((SCREEN_WIDTH/2)+22, 0));
-        graphics_draw_line(ctx, GPoint((SCREEN_WIDTH/2)+2, 1),
-                           GPoint((SCREEN_WIDTH/2)+22, 1));
-        graphics_draw_line(ctx, GPoint((SCREEN_WIDTH/2)+2, 2),
-                           GPoint((SCREEN_WIDTH/2)+22, 2));
-    }
-}
-
-
-
-void
-set_time (int which)
-{
-
-    /*
-     * Create the base window
-     */
-    if (!time_window)
-	time_window = window_create();
-
-    /*
-     * Create the hours and minutes layers
-     */
-    if (!time_layer) {
-#if defined(PBL_RECT)
-	time_layer = text_layer_create(GRect(0, 12, /* origin */
-					     SCREEN_WIDTH, FONT_HEIGHT*3)); /* size */
-	line_layer = layer_create(GRect(0, FONT_HEIGHT*3, /* origin */
-					     SCREEN_WIDTH, 5)); /* size */
-#elif defined(PBL_ROUND)
-	time_layer = text_layer_create(GRect(0, 30, /* origin */
-					     SCREEN_WIDTH, FONT_HEIGHT*3)); /* size */
-	line_layer = layer_create(GRect(0, (FONT_HEIGHT*3)+15, /* origin */
-					     SCREEN_WIDTH, 5)); /* size */
-#endif
-        layer_set_update_proc(line_layer, line_update_proc);
-    }
-
-    text_layer_set_font(time_layer, my_font);
-    text_layer_set_text_alignment(time_layer, GTextAlignmentCenter);
-    layer_add_child(window_get_root_layer(time_window), (Layer *)time_layer);
-    layer_add_child(window_get_root_layer(time_window), line_layer);
-
-    time_setting = which;		/* which one we're setting */
-    time_select_pointer = TIME_SELECT_HOURS;
-    time_select_hours = (which == TIME_START) ? start_hour : stop_hour;
-    time_select_minutes = (which == TIME_START) ? start_min : stop_min;
-    format_time();
-    text_layer_set_text(time_layer, time_select_text);
-    window_set_click_config_provider(time_window, time_config_provider);
-
-    window_stack_push(time_window, true);
-}
-
-
-/***********************************************************/
-/* Routines for setting backlight duration information     */
-/***********************************************************/
-
-
-NumberWindow *number_window=NULL;
-
-
-void
-restart_worker (void)
-{
-    if (app_worker_is_running()) {
-        app_log(APP_LOG_LEVEL_WARNING,
-                __FILE__,
-                __LINE__,
-                "restarting worker");
-        app_worker_kill();
-        psleep(1000);                   /* wait a little while */
-        app_worker_launch();
-    } else {
-        app_worker_launch();
-    }
-}
-
-
-void
-number_window_select (NumberWindow *nw, void *context)
-{
-    uint32_t val;
-
-    time_duration = number_window_get_value(nw);
-    app_log(APP_LOG_LEVEL_WARNING,
-            __FILE__,
-            __LINE__,
-            "Number Window select: duration = %d", time_duration);
-
-    persist_write_int(DURATION, (uint32_t)time_duration);
-    val = persist_read_int(DURATION);
-    if (val) {
-        time_duration = (int)val;
-    }
-    app_log(APP_LOG_LEVEL_WARNING,
-            __FILE__,
-            __LINE__,
-            "duration re-read as %d", time_duration);
-
-    /* Restart worker, so we get the new values */
-    restart_worker();
-
-    window_stack_pop(true);
-    number_window_destroy(number_window);
-    number_window = NULL;
-}
-
-NumberWindowCallbacks number_window_callbacks={
-    NULL,
-    NULL,
-    number_window_select
-};
-
-
-
-void
-set_timeout (void)
-{
-    /*
-     * Create a window for setting a number
-     */
-    if (number_window) {
-        number_window_destroy(number_window);
-    }
-    number_window = number_window_create("Set Duration", number_window_callbacks, NULL);
-
-    if (!number_window) {
-        app_log(APP_LOG_LEVEL_WARNING,
-                __FILE__,
-                __LINE__,
-                "Error creating number window");
-        return;                         /* internal error */
-    }
-
-    number_window_set_max(number_window, 60);
-    number_window_set_min(number_window, 0);
-    number_window_set_value(number_window, time_duration);
-
-    window_stack_push((Window *)number_window, true);
-}
-
-
-void
-clear_times (void)
-{
-    start_hour = 0;
-    start_min = 0;
-    stop_hour = 0;
-    stop_min = 0;
-    save_and_initiate_timer(TIME_START);
-    save_and_initiate_timer(TIME_STOP);
-}
-
-void
-destroy_samples_window(void)
-{
-
-    window_destroy(sample_window);
-    text_layer_destroy(sample_layer);
-    sample_window = NULL;
-    sample_layer = NULL;
-}
-
-static void
-select_sample_handler(ClickRecognizerRef recognizer, void *context) {
-
-    uint32_t val;
-
-    app_log(APP_LOG_LEVEL_WARNING,
-            __FILE__,
-            __LINE__,
-            "Samples Window select: samples = %d", samples);
-
-    persist_write_int(SAMPLES, (uint32_t)samples);
-    val = persist_read_int(SAMPLES);
-    if (val) {
-        samples = (int)val;
-    }
-    app_log(APP_LOG_LEVEL_WARNING,
-            __FILE__,
-            __LINE__,
-            "samples re-read as %d", samples);
-
-    /* Restart worker, so we get the new values */
-    if (app_worker_is_running()) {
-        app_log(APP_LOG_LEVEL_WARNING,
-                __FILE__,
-                __LINE__,
-                "restarting worker");
-        app_worker_kill();
-        psleep(1000);                   /* wait a little while */
-        app_worker_launch();
-    }
-
-    window_stack_pop(true);
-    destroy_samples_window();
-}
-
-void
-update_samples_window (void) {
-
-    snprintf(sample_text, sizeof(sample_text),
-             "%s\n%d", SAMPLE_TEXT, samples);
-
-    text_layer_set_text_alignment(sample_layer, GTextAlignmentCenter);
-    text_layer_set_text(sample_layer, sample_text);
-}
-
-
-static void
-up_sample_handler (ClickRecognizerRef recognizer, void *context) {
-
-    samples++;
-    if (samples > RTW_MAX_CONFIRM_SAMPLES)
-        samples = RTW_MAX_CONFIRM_SAMPLES;
-    update_samples_window();
-}
-
-static void
-down_sample_handler (ClickRecognizerRef recognizer, void *context) {
-
-    samples--;
-    if (samples < RTW_MIN_CONFIRM_SAMPLES)
-        samples = RTW_MIN_CONFIRM_SAMPLES;
-    update_samples_window();
-}
-
-static void
-sample_config_provider (void *context) {
-
-  window_single_click_subscribe(BUTTON_ID_SELECT, select_sample_handler);
-  window_single_click_subscribe(BUTTON_ID_UP, up_sample_handler);
-  window_single_click_subscribe(BUTTON_ID_DOWN, down_sample_handler);
-
-  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, up_sample_handler);
-  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, down_sample_handler);
-}
-
-void
-set_samples (void)
-{
-
-    app_log(APP_LOG_LEVEL_WARNING,
-            __FILE__,
-            __LINE__,
-            "set_samples");
-    /*
-     * Create a window for setting a number
-     */
-    if (sample_window) {
-        destroy_samples_window();
-    }
-
-    app_log(APP_LOG_LEVEL_WARNING,
-            __FILE__,
-            __LINE__,
-            "set_samples 2");
-    /*
-     * Create the base window
-     */
-    if (!sample_window)
-	sample_window = window_create();
-
-    /*
-     * Create the hours and minutes layers
-     */
-    if (!sample_layer) {
-#if defined(PBL_RECT)
-	sample_layer = text_layer_create(GRect(0, 20, /* origin */
-                                               SCREEN_WIDTH, SCREEN_HEIGHT-20)); /* size */
-#elif defined(PBL_ROUND)
-	sample_layer = text_layer_create(GRect(20, (SCREEN_HEIGHT/2)-(FONT_HEIGHT*2), /* origin */
-                                               SCREEN_WIDTH-40, FONT_HEIGHT*4)); /* size */
-#endif
-    }
-
-    text_layer_set_font(sample_layer, my_font);
-    text_layer_set_text_alignment(sample_layer, GTextAlignmentCenter);
-    layer_add_child(window_get_root_layer(sample_window), (Layer *)sample_layer);
-
-    snprintf(sample_text, sizeof(sample_text),
-             "%s\n%d", SAMPLE_TEXT, samples);
-    text_layer_set_text(sample_layer, sample_text);
-    window_set_click_config_provider(sample_window, sample_config_provider);
-
-    window_stack_push(sample_window, true);
-}
-
-
-/*
- * Toggle "on while charging" mode
- */
-static void
-on_while_charging (void)
-{
-    static char buffer[40];
-
-    if (charging_mode) {
-        charging_mode = false;
-    } else {
-        charging_mode = true;
-    }
-
-    persist_write_bool(CHARGING, charging_mode);
-
-    snprintf(buffer, sizeof(buffer), "Light will be %s during charging",
-             charging_mode ? "on" : "off");
-    text_layer_set_text(text_layer, buffer);
-
-    restart_worker();
-}
-
-/*
- * Toggle "on while powered" mode
- */
-static void
-on_while_plugged (void)
-{
-    static char buffer[40];
-
-    if (plugged_mode) {
-        plugged_mode = false;
-    } else {
-        plugged_mode = true;
-    }
-
-    persist_write_bool(PLUGGED, plugged_mode);
-
-    snprintf(buffer, sizeof(buffer), "Light will be %s while plugged in",
-             plugged_mode ? "on" : "off");
-    text_layer_set_text(text_layer, buffer);
-
-    restart_worker();
-}
-
-
-/*
- * Use the API which only turns on the light when needed,
- * watching ambient light.
- */
-static void
-set_ambient (void)
-{
-    static char buffer[40];
-
-    if (ambient) {
-        ambient = false;
-    } else {
-        ambient = true;
-    }
-
-    persist_write_bool(AMBIENT, ambient);
-    snprintf(buffer, sizeof(buffer), "Use of ambient light sensor is %s",
-             ambient ? "on" : "off");
-    text_layer_set_text(text_layer, buffer);
-
-    restart_worker();
-}
-
-
-/*************************************
- * Main menu definitions
- */
-void
-top_menu_callback (int index, void *context)
-{
-
-    app_log(APP_LOG_LEVEL_WARNING,
-	    __FILE__,
-	    __LINE__,
-	    "Main Menu callback on row %d\n", index);
-
-    switch ( index ) {
-    case 0:				/* toggle auto-backlight */
-        app_log(APP_LOG_LEVEL_WARNING,
-                __FILE__,
-                __LINE__,
-                "Toggling backlight");
-	if (app_worker_is_running()) {
-            app_log(APP_LOG_LEVEL_WARNING,
-                    __FILE__,
-                    __LINE__,
-                    "Toggling backlight off");
-	    text_layer_set_text(text_layer, "Light off");
-	    app_worker_kill();
-	} else {
-            app_log(APP_LOG_LEVEL_WARNING,
-                    __FILE__,
-                    __LINE__,
-                    "Toggling backlight on");
-	    text_layer_set_text(text_layer, "Light on");
-	    app_worker_launch();
-	}
-	break;
-
-    case 1:				/* Set Start Time */
-	set_time(TIME_START);
-	return;
-
-    case 2:				/* Set Start Time */
-	set_time(TIME_STOP);
-	return;
-
-    case 3:				/* Set Timeout */
-	set_timeout();
-	return;
-
-    case 4:				/* Clear times */
-	clear_times();
-	return;
-
-    case 5:				/* Samples per callback */
-	set_samples();
-	return;
-
-    case 6:
-        on_while_charging();            /* keep light on while charging */
-        break;
-
-    case 7:
-        on_while_plugged();            /* keep light on while powered */
-        break;
-
-    case 8:
-        set_ambient();               /* Use ambient light control */
-        break;
-    }
-
-    window_stack_pop(true); /* menu window */
-}
-
-static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
-
-    app_log(APP_LOG_LEVEL_WARNING,
-	    __FILE__,
-	    __LINE__,
-	    "Top Click handler");
-
-    window_stack_push(top_menu_window, true);
-    text_layer_set_text_alignment(text_layer, GTextAlignmentCenter);
-    text_layer_set_text(text_layer, initial_text);
-    simple_menu_layer_set_selected_index(top_menu_layer, 0 /* toggle */, false);
-}
-
-static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
-
-    app_log(APP_LOG_LEVEL_WARNING,
-            __FILE__,
-            __LINE__,
-            "Turning backlight on");
-    app_worker_launch();
-    text_layer_set_text(text_layer, "Light on");
-}
-
-static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
-
-    app_log(APP_LOG_LEVEL_WARNING,
-            __FILE__,
-            __LINE__,
-            "Turning backlight off");
+static void set_worker(bool on) {
+  if (on) {
+    AppWorkerResult result = app_worker_launch();
+    // The watch may ask to confirm switching background apps; assume yes and
+    // let the refresh on return to this window correct it.
+    s_worker_on = result == APP_WORKER_RESULT_SUCCESS ||
+                  result == APP_WORKER_RESULT_ALREADY_RUNNING ||
+                  result == APP_WORKER_RESULT_ASKING_CONFIRMATION;
+  } else {
     app_worker_kill();
-    text_layer_set_text(text_layer, "Light off");
+    s_worker_on = false;
+  }
 }
 
-static void click_config_provider(void *context) {
-  window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
-  window_single_click_subscribe(BUTTON_ID_UP, up_click_handler);
-  window_single_click_subscribe(BUTTON_ID_DOWN, down_click_handler);
+
+/****************************************************************************
+ * Schedule: start the worker at one time of day and stop it at another
+ ****************************************************************************/
+
+static WakeupId schedule_daily(int hour, int min, int cookie) {
+  time_t now = time(NULL);
+  struct tm *local = localtime(&now);
+  int32_t delta = (hour - local->tm_hour) * HOURS + (min - local->tm_min) * MINUTES -
+                  local->tm_sec;
+  if (delta <= 0) delta += DAYS;
+  time_t when = now + delta;
+  WakeupId id = wakeup_schedule(when, cookie, true);
+  // Another wakeup within a minute of this one: shift a minute earlier.
+  for (int tries = 0; id == E_RANGE && tries < 5; ++tries) {
+    when -= MINUTES;
+    id = wakeup_schedule(when, cookie, true);
+  }
+  return id;
+}
+
+static bool inside_schedule(void) {
+  time_t now = time(NULL);
+  struct tm *local = localtime(&now);
+  int t = local->tm_hour * 60 + local->tm_min;
+  int start = s_start_hour * 60 + s_start_min, stop = s_stop_hour * 60 + s_stop_min;
+  if (start == stop) return true;
+  return start < stop ? (t >= start && t < stop) : (t >= start || t < stop);
+}
+
+// Before the schedule switch existed, both times were always scheduled at
+// 00:00, so a worker turned off in the app came back on every midnight.
+static void update_schedule(bool apply_now) {
+  wakeup_cancel_all();
+  if (!s_schedule) return;
+  schedule_daily(s_start_hour, s_start_min, TIME_START);
+  schedule_daily(s_stop_hour, s_stop_min, TIME_STOP);
+  if (apply_now) set_worker(inside_schedule());
+}
+
+
+/****************************************************************************
+ * Time picker: boxed fields like the built-in Alarms app
+ ****************************************************************************/
+
+static Window *s_picker_window;
+static Layer *s_picker_layer;
+static int s_picker_which, s_picker_field, s_picker_hour, s_picker_min;
+
+static int picker_fields(void) { return clock_is_24h_style() ? 2 : 3; }
+
+static void picker_update(Layer *layer, GContext *ctx) {
+  GRect bounds = layer_get_bounds(layer);
+  bool h24 = clock_is_24h_style();
+  int count = picker_fields(), width = h24 ? 50 : 40, gap = 10, height = 44;
+  int x = (bounds.size.w - (count * width + (count - 1) * gap)) / 2;
+  int y = bounds.size.h / 2 - height / 2 + 8;
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
+
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, s_picker_which == TIME_START ? "Turn on at" : "Turn off at",
+                     fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(0, y - 46, bounds.size.w, 30), GTextOverflowModeFill,
+                     GTextAlignmentCenter, NULL);
+
+  char text[3][4];
+  snprintf(text[0], sizeof(text[0]), h24 ? "%02d" : "%d",
+           h24 ? s_picker_hour : (s_picker_hour + 11) % 12 + 1);
+  snprintf(text[1], sizeof(text[1]), "%02d", s_picker_min);
+  snprintf(text[2], sizeof(text[2]), "%s", s_picker_hour < 12 ? "AM" : "PM");
+
+  for (int i = 0; i < count; ++i) {
+    GRect box = GRect(x + i * (width + gap), y, width, height);
+    if (i == s_picker_field) {
+      graphics_context_set_fill_color(ctx, ACCENT);
+      graphics_fill_rect(ctx, box, 6, GCornersAll);
+      graphics_context_set_text_color(ctx, ACCENT_TEXT);
+    } else {
+      graphics_context_set_stroke_color(ctx, GColorBlack);
+      graphics_draw_round_rect(ctx, box, 6);
+      graphics_context_set_text_color(ctx, GColorBlack);
+    }
+    graphics_draw_text(ctx, text[i], font, GRect(box.origin.x, box.origin.y + 3, width, height - 3),
+                       GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+  }
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, ":", font, GRect(x + width, y + 1, gap, height), GTextOverflowModeFill,
+                     GTextAlignmentCenter, NULL);
+}
+
+static void picker_change(int step) {
+  if (s_picker_field == 0) {
+    if (clock_is_24h_style()) {
+      s_picker_hour = (s_picker_hour + step + 24) % 24;
+    } else { // Stay within AM or PM; that is its own field.
+      int half = s_picker_hour >= 12 ? 12 : 0;
+      s_picker_hour = half + (s_picker_hour % 12 + step + 12) % 12;
+    }
+  } else if (s_picker_field == 1) {
+    s_picker_min = (s_picker_min + step + 60) % 60;
+  } else {
+    s_picker_hour = (s_picker_hour + 12) % 24;
+  }
+  layer_mark_dirty(s_picker_layer);
+}
+
+static void picker_up(ClickRecognizerRef recognizer, void *context) { picker_change(1); }
+static void picker_down(ClickRecognizerRef recognizer, void *context) { picker_change(-1); }
+
+static void picker_select(ClickRecognizerRef recognizer, void *context) {
+  if (++s_picker_field < picker_fields()) {
+    layer_mark_dirty(s_picker_layer);
+    return;
+  }
+  if (s_picker_which == TIME_START) {
+    s_start_hour = s_picker_hour;
+    s_start_min = s_picker_min;
+    persist_write_int(START_HOUR, s_start_hour);
+    persist_write_int(START_MINUTE, s_start_min);
+  } else {
+    s_stop_hour = s_picker_hour;
+    s_stop_min = s_picker_min;
+    persist_write_int(STOP_HOUR, s_stop_hour);
+    persist_write_int(STOP_MINUTE, s_stop_min);
+  }
+  update_schedule(true);
+  window_stack_pop(true);
+}
+
+static void picker_back(ClickRecognizerRef recognizer, void *context) {
+  if (s_picker_field > 0) {
+    --s_picker_field;
+    layer_mark_dirty(s_picker_layer);
+  } else {
+    window_stack_pop(true); // Cancel without saving.
+  }
+}
+
+static void picker_click_config(void *context) {
+  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, picker_up);
+  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, picker_down);
+  window_single_click_subscribe(BUTTON_ID_SELECT, picker_select);
+  window_single_click_subscribe(BUTTON_ID_BACK, picker_back);
+}
+
+static void picker_load(Window *window) {
+  Layer *root = window_get_root_layer(window);
+  s_picker_layer = layer_create(layer_get_bounds(root));
+  layer_set_update_proc(s_picker_layer, picker_update);
+  layer_add_child(root, s_picker_layer);
+}
+
+static void picker_unload(Window *window) {
+  layer_destroy(s_picker_layer);
+  window_destroy(s_picker_window);
+  s_picker_window = NULL;
+}
+
+static void open_picker(int which) {
+  s_picker_which = which;
+  s_picker_field = 0;
+  s_picker_hour = which == TIME_START ? s_start_hour : s_stop_hour;
+  s_picker_min = which == TIME_START ? s_start_min : s_stop_min;
+  s_picker_window = window_create();
+  window_set_background_color(s_picker_window, GColorWhite);
+  window_set_click_config_provider(s_picker_window, picker_click_config);
+  window_set_window_handlers(s_picker_window, (WindowHandlers) {
+    .load = picker_load,
+    .unload = picker_unload,
+  });
+  window_stack_push(s_picker_window, true);
+}
+
+
+/****************************************************************************
+ * Settings menu
+ ****************************************************************************/
+
+typedef enum {
+  ROW_ENABLED, ROW_SENSITIVITY,
+  ROW_DURATION, ROW_SENSOR, ROW_CHARGER,
+  ROW_SCHEDULE, ROW_START, ROW_STOP,
+  ROW_LOGGING,
+} Row;
+
+enum { SECTION_WAKE, SECTION_LIGHT, SECTION_SCHEDULE, SECTION_ADVANCED, NUM_SECTIONS };
+static const char *s_section_titles[] = {"Raise to wake", "Light", "Schedule", "Advanced"};
+
+static Row row_at(MenuIndex *index) {
+  switch (index->section) {
+    case SECTION_WAKE: return ROW_ENABLED + index->row;
+    case SECTION_LIGHT: return ROW_DURATION + index->row;
+    case SECTION_SCHEDULE: return ROW_SCHEDULE + index->row;
+    default: return ROW_LOGGING;
+  }
+}
+
+static uint16_t get_num_sections(MenuLayer *menu, void *context) { return NUM_SECTIONS; }
+
+static uint16_t get_num_rows(MenuLayer *menu, uint16_t section, void *context) {
+  switch (section) {
+    case SECTION_WAKE: return 2;
+    case SECTION_LIGHT: return 3;
+    case SECTION_SCHEDULE: return s_schedule ? 3 : 1; // Times only when in use.
+    default: return 1;
+  }
+}
+
+static int16_t get_header_height(MenuLayer *menu, uint16_t section, void *context) {
+  return PBL_IF_ROUND_ELSE(0, MENU_CELL_BASIC_HEADER_HEIGHT);
+}
+
+static void draw_header(GContext *ctx, const Layer *cell, uint16_t section, void *context) {
+  menu_cell_basic_header_draw(ctx, cell, s_section_titles[section]);
+}
+
+static int16_t get_cell_height(MenuLayer *menu, MenuIndex *index, void *context) {
+  return PBL_IF_ROUND_ELSE(menu_layer_is_index_selected(menu, index) ?
+                           MENU_CELL_ROUND_FOCUSED_TALL_CELL_HEIGHT :
+                           MENU_CELL_ROUND_UNFOCUSED_SHORT_CELL_HEIGHT, 44);
+}
+
+static void format_time(char *buffer, size_t size, int hour, int min, bool compact) {
+  if (clock_is_24h_style()) {
+    snprintf(buffer, size, "%02d:%02d", hour, min);
+  } else {
+    snprintf(buffer, size, compact ? "%d:%02d%s" : "%d:%02d %s", (hour + 11) % 12 + 1, min,
+             hour < 12 ? (compact ? "a" : "AM") : (compact ? "p" : "PM"));
+  }
+}
+
+#if !defined(PBL_ROUND) // Round screens show "On" / "Off" instead.
+// Check mark for on, cross for off, drawn so it follows the highlight colours.
+static void draw_toggle(GContext *ctx, GRect cell, bool on, bool highlighted) {
+  GPoint o = GPoint(cell.size.w - 24, cell.size.h / 2 - 7);
+#ifdef PBL_COLOR
+  GColor color = highlighted ? ACCENT_TEXT : (on ? GColorIslamicGreen : GColorRed);
+  graphics_context_set_antialiased(ctx, true);
+#else
+  GColor color = highlighted ? ACCENT_TEXT : GColorBlack;
+#endif
+  graphics_context_set_stroke_color(ctx, color);
+  graphics_context_set_stroke_width(ctx, 3);
+  if (on) {
+    graphics_draw_line(ctx, GPoint(o.x + 1, o.y + 7), GPoint(o.x + 5, o.y + 12));
+    graphics_draw_line(ctx, GPoint(o.x + 5, o.y + 12), GPoint(o.x + 14, o.y + 1));
+  } else {
+    graphics_draw_line(ctx, GPoint(o.x + 2, o.y + 2), GPoint(o.x + 12, o.y + 12));
+    graphics_draw_line(ctx, GPoint(o.x + 12, o.y + 2), GPoint(o.x + 2, o.y + 12));
+  }
+  graphics_context_set_stroke_width(ctx, 1);
+}
+#endif
+
+static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *context) {
+  static char value[24];
+  const char *title = "", *subtitle = NULL;
+  int toggle = -1; // -1 = value row, 0 = off, 1 = on
+
+  switch (row_at(index)) {
+    case ROW_ENABLED:
+      title = "Enabled"; subtitle = "Light on raise"; toggle = s_worker_on;
+      break;
+    case ROW_SENSITIVITY:
+      title = "Sensitivity"; subtitle = s_sensitivity_names[s_sensitivity];
+      break;
+    case ROW_DURATION:
+      title = "Light duration";
+      if (s_ambient) {
+        subtitle = "Watch default";
+      } else if (s_duration) {
+        snprintf(value, sizeof(value), "%d seconds", s_duration);
+        subtitle = value;
+      } else {
+        subtitle = "Until lowered";
+      }
+      break;
+    case ROW_SENSOR:
+      title = "Light sensor"; subtitle = "Only when dark"; toggle = s_ambient;
+      break;
+    case ROW_CHARGER:
+      title = "Charger light";
+      subtitle = s_charger_names[s_plugged ? 2 : (s_charging ? 1 : 0)];
+      break;
+    case ROW_SCHEDULE:
+      title = "Schedule"; toggle = s_schedule;
+      if (s_schedule) {
+        char start[8], stop[8];
+        format_time(start, sizeof(start), s_start_hour, s_start_min, true);
+        format_time(stop, sizeof(stop), s_stop_hour, s_stop_min, true);
+        snprintf(value, sizeof(value), "%s - %s", start, stop);
+        subtitle = value;
+      } else {
+        subtitle = "Runs all day";
+      }
+      break;
+    case ROW_START:
+    case ROW_STOP: {
+      bool start = row_at(index) == ROW_START;
+      title = start ? "Turn on at" : "Turn off at";
+      format_time(value, sizeof(value), start ? s_start_hour : s_stop_hour,
+                  start ? s_start_min : s_stop_min, false);
+      subtitle = value;
+      break;
+    }
+    case ROW_LOGGING:
+      title = "Logging"; subtitle = s_logging ? "Uses battery" : "For tuning"; toggle = s_logging;
+      break;
+  }
+
+#if defined(PBL_ROUND)
+  if (toggle >= 0) subtitle = toggle ? "On" : "Off";
+  menu_cell_basic_draw(ctx, cell, title, subtitle, NULL);
+#else
+  GRect bounds = layer_get_bounds(cell);
+  bool highlighted = menu_cell_layer_is_highlighted(cell);
+  int width = bounds.size.w - 10 - (toggle >= 0 ? 26 : 0);
+  graphics_context_set_text_color(ctx, highlighted ? ACCENT_TEXT : GColorBlack);
+  graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(5, -3, width, 28), GTextOverflowModeTrailingEllipsis,
+                     GTextAlignmentLeft, NULL);
+  graphics_draw_text(ctx, subtitle, fonts_get_system_font(FONT_KEY_GOTHIC_18),
+                     GRect(5, 21, width, 22), GTextOverflowModeTrailingEllipsis,
+                     GTextAlignmentLeft, NULL);
+  if (toggle >= 0) draw_toggle(ctx, bounds, toggle, highlighted);
+#endif
+}
+
+static void select_click(MenuLayer *menu, MenuIndex *index, void *context) {
+  switch (row_at(index)) {
+    case ROW_ENABLED:
+      set_worker(!s_worker_on);
+      break;
+    case ROW_SENSITIVITY:
+      s_sensitivity = (s_sensitivity + 1) % 3;
+      persist_write_int(RTW_SENSITIVITY_PERSIST_KEY, s_sensitivity);
+      send_settings();
+      break;
+    case ROW_DURATION: {
+      if (s_ambient) return; // The watch's own timeout applies with the sensor on.
+      // Next preset after the current value; unknown values jump to a preset.
+      unsigned count = ARRAY_LENGTH(s_durations), next = 0;
+      for (unsigned i = 0; i < count; ++i) {
+        if (s_durations[i] == s_duration) { next = (i + 1) % count; break; }
+        if (s_durations[i] > s_duration) { next = i; break; }
+      }
+      s_duration = s_durations[next];
+      persist_write_int(RTW_DURATION_PERSIST_KEY, s_duration);
+      send_settings();
+      break;
+    }
+    case ROW_SENSOR:
+      s_ambient = !s_ambient;
+      persist_write_bool(RTW_AMBIENT_PERSIST_KEY, s_ambient);
+      send_settings();
+      break;
+    case ROW_CHARGER: {
+      int next = (s_plugged ? 2 : (s_charging ? 1 : 0)) + 1;
+      s_charging = next == 1;
+      s_plugged = next == 2;
+      persist_write_bool(RTW_CHARGING_PERSIST_KEY, s_charging);
+      persist_write_bool(RTW_PLUGGED_PERSIST_KEY, s_plugged);
+      send_settings();
+      break;
+    }
+    case ROW_SCHEDULE:
+      s_schedule = !s_schedule;
+      persist_write_bool(SCHEDULE, s_schedule);
+      update_schedule(true);
+      break;
+    case ROW_START:
+      open_picker(TIME_START);
+      return;
+    case ROW_STOP:
+      open_picker(TIME_STOP);
+      return;
+    case ROW_LOGGING:
+      s_logging = !s_logging;
+      persist_write_bool(RTW_LOGGING_PERSIST_KEY, s_logging);
+      send_settings();
+      break;
+  }
+  menu_layer_reload_data(menu);
+}
+
+static void refresh_worker_state(void *context) {
+  s_refresh_timer = NULL;
+  s_worker_on = app_worker_is_running();
+  menu_layer_reload_data(s_menu);
 }
 
 static void window_load(Window *window) {
-  Layer *window_layer = window_get_root_layer(window);
+  Layer *root = window_get_root_layer(window);
+  s_menu = menu_layer_create(layer_get_bounds(root));
+  menu_layer_set_callbacks(s_menu, NULL, (MenuLayerCallbacks) {
+    .get_num_sections = get_num_sections,
+    .get_num_rows = get_num_rows,
+    .get_header_height = get_header_height,
+    .draw_header = draw_header,
+    .get_cell_height = get_cell_height,
+    .draw_row = draw_row,
+    .select_click = select_click,
+  });
+  menu_layer_set_normal_colors(s_menu, GColorWhite, GColorBlack);
+  menu_layer_set_highlight_colors(s_menu, ACCENT, ACCENT_TEXT);
+  menu_layer_set_click_config_onto_window(s_menu, window);
+  layer_add_child(root, menu_layer_get_layer(s_menu));
+}
 
-#if defined(PBL_RECT)
-  text_layer = text_layer_create(GRect(0, 20, /* origin */
-                                               SCREEN_WIDTH, SCREEN_HEIGHT-20)); /* size */
-#elif defined(PBL_ROUND)
-  text_layer = text_layer_create(GRect(20, (SCREEN_HEIGHT/2)-(FONT_HEIGHT*2), /* origin */
-                                               SCREEN_WIDTH-40, FONT_HEIGHT*4)); /* size */
-#endif
-  text_layer_set_font(text_layer, my_font);
-  text_layer_set_text_alignment(text_layer, GTextAlignmentCenter);
-  text_layer_set_text(text_layer, initial_text);
-  text_layer_set_overflow_mode(text_layer, GTextOverflowModeWordWrap);
-  layer_add_child(window_layer, text_layer_get_layer(text_layer));
+static void window_appear(Window *window) {
+  // Back from the time picker or a "switch background app?" prompt. A newly
+  // launched worker can take a moment to report running, so check shortly.
+  s_worker_on = app_worker_is_running() || s_worker_on;
+  menu_layer_reload_data(s_menu);
+  if (s_refresh_timer) app_timer_cancel(s_refresh_timer);
+  s_refresh_timer = app_timer_register(1000, refresh_worker_state, NULL);
 }
 
 static void window_unload(Window *window) {
-  text_layer_destroy(text_layer);
-  text_layer = NULL;
-}
-
-static void init(void) {
-  window = window_create();
-  window_set_click_config_provider(window, click_config_provider);
-  window_set_window_handlers(window, (WindowHandlers) {
-    .load = window_load,
-    .unload = window_unload,
-  });
-  const bool animated = true;
-
-  Layer *window_layer = window_get_root_layer(window);
-
-//  text_layer = text_layer_create((GRect) { .origin = { 0, 0 }, .size = { bounds.size.w, bounds.size.h } });
-
-  my_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-
-/*
- * Create the top level menu
- */
-  top_menu_window = window_create();
-  top_menu_layer = simple_menu_layer_create(layer_get_frame(window_layer), top_menu_window,
-					    &top_menu_sections, num_top_menu_sections, NULL);
-  layer_add_child(window_get_root_layer(top_menu_window), simple_menu_layer_get_layer(top_menu_layer));
-
-
-/*
- * Start main window
- */
-  window_stack_push(window, animated);
-}
-
-static void deinit(void) {
-  if (time_window)
-      window_destroy(time_window);
-  if (number_window)
-      number_window_destroy(number_window);
-  if (time_layer)
-      text_layer_destroy(time_layer);
-  if (line_layer)
-      layer_destroy(line_layer);
-  if (sample_window)
-      window_destroy(sample_window);
-  if (sample_layer)
-      text_layer_destroy(sample_layer);
-  if (text_layer)
-      text_layer_destroy(text_layer);
-  if (top_menu_layer)
-      simple_menu_layer_destroy(top_menu_layer);
-  if (top_menu_window)
-      window_destroy(top_menu_window);
-  window_destroy(window);
-}
-
-void
-read_alarm_data (void)
-{
-    uint32_t val;
-
-    val = persist_read_int(START_ALARM);
-    if (val) {
-	start_alarm_id = (WakeupId)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "start_alarm_id=%u", (unsigned int)val);
-    }
-
-    val = persist_read_int(STOP_ALARM);
-    if (val) {
-	stop_alarm_id = (WakeupId)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "stop_alarm_id=%u", (unsigned int)val);
-    }
-
-    val = persist_read_int(START_HOUR);
-    if (val) {
-	start_hour = (int)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "start_hour=%u", (unsigned int)val);
-    }
-    val = persist_read_int(START_MINUTE);
-    if (val) {
-	start_min = (int)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "start_min=%u", (unsigned int)val);
-    }
-
-    val = persist_read_int(STOP_HOUR);
-    if (val) {
-	stop_hour = (int)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "stop_hour=%u", (unsigned int)val);
-    }
-    val = persist_read_int(STOP_MINUTE);
-    if (val) {
-	stop_min = (int)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "stop_min=%u", (unsigned int)val);
-    }
-    if (persist_exists(DURATION)) {
-        val = persist_read_int(DURATION);
-        if (val) {
-            time_duration = (int)val;
-            APP_LOG(APP_LOG_LEVEL_DEBUG, "time_duration=%u", (unsigned int)val);
-        }
-    } else {
-        time_duration = 5;              /* default */
-        APP_LOG(APP_LOG_LEVEL_DEBUG, "init time_duration=5");
-    }
-    if (persist_exists(SAMPLES)) {
-        val = persist_read_int(SAMPLES);
-        if (val) {
-            samples = (int)val;
-            APP_LOG(APP_LOG_LEVEL_DEBUG, "samples=%u", (unsigned int)val);
-        }
-    } else {
-        samples = RTW_DEFAULT_CONFIRM_SAMPLES;
-        APP_LOG(APP_LOG_LEVEL_DEBUG, "init confirmation samples=%u", samples);
-    }
-    if (samples < RTW_MIN_CONFIRM_SAMPLES || samples > RTW_MAX_CONFIRM_SAMPLES)
-        samples = RTW_DEFAULT_CONFIRM_SAMPLES;
-    val = persist_read_bool(CHARGING);
-    if (val) {
-	charging_mode = (bool)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "charging_mode=%u", (unsigned int)charging_mode);
-    }
-    val = persist_read_bool(PLUGGED);
-    if (val) {
-	plugged_mode = (bool)val;
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "plugged_mode=%u", (unsigned int)plugged_mode);
-    }
+  if (s_refresh_timer) app_timer_cancel(s_refresh_timer);
+  s_refresh_timer = NULL;
+  menu_layer_destroy(s_menu);
 }
 
 
-void
-handle_wakeup (WakeupId id, int32_t cookie)
-{
+/****************************************************************************
+ * Launch
+ ****************************************************************************/
 
-    if (cookie == TIME_START) {
-        app_log(APP_LOG_LEVEL_WARNING,
-                __FILE__,
-                __LINE__,
-                "Start backlight");
-	app_worker_launch();
-	wakeup_cancel(start_alarm_id);
-	schedule_wakeup(&start_alarm_id, start_hour, start_min, TIME_START, START_ALARM);
-    } else { /* TIME_STOP */
-        app_log(APP_LOG_LEVEL_WARNING,
-                __FILE__,
-                __LINE__,
-                "Stop backlight");
-
-        light_enable(false);            /* make sure it's off */
-	app_worker_kill();
-	wakeup_cancel(stop_alarm_id);
-	schedule_wakeup(&stop_alarm_id, stop_hour, stop_min, TIME_STOP, STOP_ALARM);
-    }
+static void handle_wakeup(int32_t cookie) {
+  if (cookie == TIME_START) {
+    app_worker_launch();
+    schedule_daily(s_start_hour, s_start_min, TIME_START);
+  } else {
+    app_worker_kill();
+    schedule_daily(s_stop_hour, s_stop_min, TIME_STOP);
+  }
 }
-
-
 
 int main(void) {
-    AppLaunchReason reason;
-    WakeupId id = 0;
-    int32_t cookie;
+  load_settings();
 
-    reason = launch_reason();
+  if (launch_reason() == APP_LAUNCH_WAKEUP) {
+    WakeupId id;
+    int32_t cookie = TIME_START;
+    wakeup_get_launch_event(&id, &cookie);
+    handle_wakeup(cookie);
+    return 0;
+  }
 
-    app_log(APP_LOG_LEVEL_WARNING,
-            __FILE__,
-            __LINE__,
-            "Backlight - launch_reason=%d", (int)reason);
+  // Opening the app used to kill and relaunch the worker, which cut any
+  // raise-to-wake light and froze the screen for a second.
+  s_worker_on = app_worker_is_running();
+  if (s_worker_on) {
+    hand_off_light();
+  } else if (!persist_exists(STARTED_ONCE)) {
+    set_worker(true); // First run: start raise to wake. Afterwards, respect "Enabled".
+  }
+  persist_write_bool(STARTED_ONCE, true);
+  update_schedule(false);
 
-    if (reason == APP_LAUNCH_WAKEUP) {
-	wakeup_get_launch_event(&id, &cookie);
-	read_alarm_data();
-	handle_wakeup(id, cookie);
-    } else {
-        init();
-	read_alarm_data();
-        wakeup_cancel_all();            /* complete reset */
-        save_and_initiate_timer(TIME_START);
-        save_and_initiate_timer(TIME_STOP);
-        restart_worker();
-
-	APP_LOG(APP_LOG_LEVEL_DEBUG, "Done initializing, pushed window: %p", window);
-
-	app_event_loop();
-	deinit();
-    }
+  s_window = window_create();
+  window_set_window_handlers(s_window, (WindowHandlers) {
+    .load = window_load,
+    .appear = window_appear,
+    .unload = window_unload,
+  });
+  window_stack_push(s_window, true);
+  app_event_loop();
+  window_destroy(s_window);
+  return 0;
 }

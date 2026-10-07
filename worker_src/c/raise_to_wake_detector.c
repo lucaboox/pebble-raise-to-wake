@@ -42,14 +42,20 @@ static void invalidate(RtwDetector *d, RtwBlockReason reason) {
   d->block_reason = reason;
 }
 
-void rtw_detector_init(RtwDetector *d, unsigned confirmation_samples) {
+void rtw_detector_init(RtwDetector *d, unsigned confirmation_samples,
+                       unsigned rotation_total_mg) {
   *d = (RtwDetector){0};
   d->state = RTW_WAIT_LOWERED;
   if (confirmation_samples < RTW_MIN_CONFIRM_SAMPLES ||
       confirmation_samples > RTW_MAX_CONFIRM_SAMPLES) {
     confirmation_samples = RTW_DEFAULT_CONFIRM_SAMPLES;
   }
+  if (rotation_total_mg < RTW_MIN_ROTATION_TOTAL_MG ||
+      rotation_total_mg > RTW_MAX_ROTATION_TOTAL_MG) {
+    rotation_total_mg = RTW_ROTATION_TOTAL_MG;
+  }
   d->required_view_samples = (uint8_t)confirmation_samples;
+  d->rotation_total_mg = (int32_t)rotation_total_mg;
 }
 
 RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
@@ -225,7 +231,7 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
     d->have_view_entry = false;
   }
   if (!is_view || !stable || !toward_view ||
-      rotation < RTW_ROTATION_TOTAL_MG * RTW_ROTATION_TOTAL_MG) {
+      rotation < (int64_t)d->rotation_total_mg * d->rotation_total_mg) {
     d->block_reason = !is_view ? RTW_BLOCK_VIEW : (!stable ? RTW_BLOCK_MOTION :
                       (!toward_view ? RTW_BLOCK_DIRECTION : RTW_BLOCK_ROTATION));
     d->view_samples = 0;

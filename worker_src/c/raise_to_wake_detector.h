@@ -22,13 +22,16 @@ typedef struct {
   uint64_t view_entry_ms;
   uint64_t transient_start_ms;
   uint32_t view_to_raise_ms;
+  int32_t rotation_total_mg;
   uint8_t view_samples, lower_samples, required_view_samples, rest_samples;
   bool filter_ready, have_timestamp, cooldown, vibration_holdoff, have_view_entry;
   bool transient_motion;
 } RtwDetector;
 
 // Portable core: only samples and millisecond timestamps, no Pebble APIs.
-void rtw_detector_init(RtwDetector *d, unsigned confirmation_samples);
+// Out-of-range values fall back to the defaults in raise_to_wake_config.h.
+void rtw_detector_init(RtwDetector *d, unsigned confirmation_samples,
+                       unsigned rotation_total_mg);
 RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
                             uint64_t timestamp_ms, bool did_vibrate);
 const char *rtw_state_name(RtwState state);
