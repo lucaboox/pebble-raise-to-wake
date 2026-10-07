@@ -16,10 +16,8 @@ static uint64_t s_interaction_light_ms;
 static AppTimer *s_light_timer;
 static bool s_have_log_time;
 static uint64_t s_last_log_ms;
-// Health counters: raises for the app's status line, and samples so a stalled
-// motion stream can be noticed (per minute) and reported (per status request).
-static uint16_t s_raise_count;
-static uint32_t s_samples_since_tick, s_samples_since_status;
+// Samples since the last minute tick, so a stalled motion stream is noticed.
+static uint32_t s_samples_since_tick;
 
 // Formatting and queueing log lines costs battery even with no phone listening.
 #define RTW_LOG(level, ...) do { if (s_logging) APP_LOG(level, __VA_ARGS__); } while (0)
@@ -100,7 +98,6 @@ static void activate_gesture_light(uint64_t now) {
 
 static void handle_accel(AccelData *data, uint32_t num_samples) {
   s_samples_since_tick += num_samples;
-  s_samples_since_status += num_samples;
   if (s_power_light) return;
   uint64_t previous = 0;
   for (uint32_t i = 0; i < num_samples; ++i) {
@@ -137,7 +134,6 @@ static void handle_accel(AccelData *data, uint32_t num_samples) {
       s_have_log_time = true;
     }
     if (event == RTW_EVENT_RAISE) {
-      ++s_raise_count;
       activate_gesture_light(timestamp);
       RTW_LOG(APP_LOG_LEVEL_INFO, "RTW raise detected: %u samples, %lu ms from view entry",
               s_detector.required_view_samples, (unsigned long)s_detector.view_to_raise_ms);
@@ -192,14 +188,6 @@ static void app_message_handler(uint16_t type, AppWorkerMessage *message) {
     apply_settings(message->data0, message->data1, message->data2, false);
     RTW_LOG(APP_LOG_LEVEL_INFO, "RTW settings: duration=%u s sensitivity=%u flags=%u",
             message->data0, message->data1, message->data2);
-  } else if (type == RTW_MSG_STATUS) {
-    AppWorkerMessage reply = {
-      .data0 = s_raise_count,
-      .data1 = s_samples_since_status > 0,
-      .data2 = (uint16_t)s_detector.state,
-    };
-    s_samples_since_status = 0;
-    app_worker_send_message(RTW_MSG_STATUS, &reply);
   }
 }
 
@@ -243,8 +231,7 @@ static void worker_init(void) {
                    (persist_read_bool(RTW_LOGGING_PERSIST_KEY) ? RTW_SETTING_LOGGING : 0);
   s_power_light = s_forced_gesture_light = s_interaction_light = false;
   s_have_log_time = false;
-  s_raise_count = 0;
-  s_samples_since_tick = s_samples_since_status = 0;
+  s_samples_since_tick = 0;
   apply_settings((uint32_t)duration, (unsigned)sensitivity, flags, true);
 
   subscribe_accel();

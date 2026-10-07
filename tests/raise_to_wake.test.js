@@ -460,23 +460,54 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     assert.strictEqual(api.mock_battery_subscribed(), 0);
     assert.strictEqual(api.mock_off_calls(), 2, 'disabling releases the charger light');
   });
+  // Rev 8 log: a jolt over 400 ms mid-raise sent the detector back to waiting
+  // for a lowered wrist, which it only accepted when held steady, so a
+  // swinging arm never re-armed and every raise while walking was ignored.
+  function walk(ms, seed) {
+    let s = seed;
+    const noise = () => (((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) - 0.5) * 240;
+    for (let t = 0; t < ms; t += 40) {
+      const k = t / 1000 * 2 * Math.PI;
+      const jolt = t % 500 < 80 ? 1.45 : 1; // footstep: two out-of-range samples
+      feed((900 + 80 * Math.sin(k)) * jolt + noise(), (420 + 150 * Math.sin(k)) * jolt + noise(),
+           60 * Math.cos(k) * jolt + noise());
+    }
+  }
+  // Arm moving while walking: shaky all the way, never a still moment.
+  function walkMove(from, to, ms, seed) {
+    let s = seed;
+    const noise = () => (((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) - 0.5) * 240;
+    const count = Math.ceil(ms / 40);
+    for (let i = 1; i <= count; ++i) {
+      const v = from.map((value, axis) => value + (to[axis] - value) * i / count);
+      const scale = 1000 / Math.hypot(...v);
+      feed(...v.map(value => value * scale + noise()));
+    }
+  }
+  test('walking: raises keep working after a long jolt mid-raise', () => {
+    hold(900, 420, 0, 800); walk(2000, 1);
+    walkMove([900, 420, 0], [600, -200, -500], 200, 3);
+    hold(1300, 700, -500, 480); // jolt over 400 ms: back to waiting for a lowered wrist
+    walk(2000, 2);
+    for (let i = 1; i <= 3; ++i) {
+      walkMove([900, 420, 0], [-60, -800, -560], 400, 20 + i); hold(-60, -800, -560, 800);
+      assert.strictEqual(raises, i, 'raise ' + i + ' while walking');
+      walkMove([-60, -800, -560], [900, 420, 0], 300, 30 + i); walk(1500, 10 + i);
+    }
+  });
+  test('walking: arm swinging at the side never lights the screen', () => {
+    hold(900, 420, 0, 800); walk(60000, 5);
+    assert.strictEqual(raises, 0);
+  });
   test('a stalled motion stream is reconnected within a minute and raises work again', () => {
     startWorker(); assert.strictEqual(api.mock_subscribes(), 1);
     lower(); api.mock_tick(); assert.strictEqual(api.mock_subscribes(), 1, 'data flowing: no reconnect');
     api.mock_tick(); assert.strictEqual(api.mock_subscribes(), 2, 'no data for a minute: reconnect');
     lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
   });
-  test('status reply reports raises, motion data and state to the app', () => {
-    startWorker(); lower(); raise();
-    api.mock_app_message(3, 0, 0, 0);
-    assert.strictEqual(api.mock_sent_type(), 3);
-    assert.strictEqual(api.mock_sent_data(0), 1, 'one raise');
-    assert.strictEqual(api.mock_sent_data(1), 1, 'motion data arrived');
-    assert.strictEqual(api.mock_sent_data(2), VIEWING);
-    api.mock_app_message(3, 0, 0, 0);
-    assert.strictEqual(api.mock_sent_data(1), 0, 'nothing since the last request');
-    lower(); raise(); api.mock_app_message(3, 0, 0, 0);
-    assert.strictEqual(api.mock_sent_data(0), 2); assert.strictEqual(api.mock_sent_data(1), 1);
+  test('worker never sends messages of its own', () => {
+    startWorker(); lower(); raise(); api.mock_app_message(3, 0, 0, 0);
+    assert.strictEqual(api.mock_sent_type(), -1);
   });
   test('invalid stored settings fall back to defaults', () => {
     startWorker({6: 999, 13: 7}); lower(); raise();

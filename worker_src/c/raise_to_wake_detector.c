@@ -90,6 +90,13 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
                      d->state == RTW_CONFIRMING_VIEW;
     bool modest_burst = magnitude >= RTW_TRANSIENT_GRAVITY_MIN_MG * RTW_TRANSIENT_GRAVITY_MIN_MG &&
                         magnitude <= RTW_TRANSIENT_GRAVITY_MAX_MG * RTW_TRANSIENT_GRAVITY_MAX_MG;
+    if (modest_burst && (d->state == RTW_WAIT_LOWERED || d->state == RTW_VIEWING)) {
+      // Footsteps and arm swing while walking: skip the sample but keep any
+      // lowering already counted, or a moving arm could never rearm.
+      d->filter_ready = false;
+      d->block_reason = RTW_BLOCK_GRAVITY;
+      return RTW_EVENT_NONE;
+    }
     if (candidate && modest_burst) {
       if (!d->transient_motion) {
         d->transient_start_ms = now;
@@ -143,7 +150,10 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
 
   if (d->state == RTW_WAIT_LOWERED || d->state == RTW_VIEWING) {
     d->block_reason = RTW_BLOCK_LOWERED;
-    if (is_lowered && stable) {
+    // Lowering does not need a steady arm: requiring one meant a wrist
+    // swinging at your side while walking never rearmed, so every later raise
+    // was ignored until the arm was held still. A raise still has to settle.
+    if (is_lowered) {
       if (d->lower_samples < RTW_LOWER_CONFIRM_SAMPLES) ++d->lower_samples;
     } else {
       d->lower_samples = 0;
