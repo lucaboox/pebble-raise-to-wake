@@ -148,6 +148,64 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     hold(-110, -470, -870, 3000);
     assert.strictEqual(lowers, 0); assert.strictEqual(api.core_state(), VIEWING);
   });
+  // Sampling slowed or paused while the watch was still: the gap must not
+  // throw away the lowered reference, or the first raise after it is missed.
+  test('resume after a sampling pause keeps the lowered reference for the next raise', () => {
+    hold(-24, -49, -1001, 800); assert.strictEqual(api.core_state(), ARMED);
+    api.core_resume(); now += 30000;   // 30 s with no samples
+    feed(-60, -330, -940);            // first sample after the pause is already mid-raise
+    move([-60, -330, -940], [-120, -614, -822], 240);
+    assert.strictEqual(raises, 1);
+  });
+  test('resume after a pause while viewing still needs a lowering first', () => {
+    hold(-24, -49, -1001, 800); move([-24, -49, -1001], [-120, -614, -822]);
+    assert.strictEqual(raises, 1);
+    api.core_resume(); now += 30000; hold(-120, -614, -822, 2000);
+    assert.strictEqual(raises, 1); assert.strictEqual(api.core_state(), VIEWING);
+  });
+  // A hand held up to look trembles a little (tens of milli-g); a resting one does not.
+  function tremble(pose, ms, amp = 40, seed = 7) {
+    let s = seed;
+    const noise = () => (((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) - 0.5) * 2 * amp;
+    for (let t = 0; t < ms; t += 40) feed(pose[0] + noise(), pose[1] + noise(), pose[2] + noise());
+  }
+  // Lift into a pose and keep holding it up by hand (no still moment at the end).
+  function liftTo(from, to, ms = 600) {
+    const count = Math.ceil(ms / 40);
+    for (let i = 1; i <= count; ++i) {
+      const v = from.map((value, axis) => value + (to[axis] - value) * i / count);
+      const scale = 1000 / Math.hypot(...v);
+      feed(...v.map(value => value * scale));
+    }
+    tremble(to, 800);
+  }
+  // In bed on your back the screen faces down at you, which the upright
+  // viewing region rejects as face-down. A separate lying view covers it.
+  test('lying on your back: raising the watch above your face lights', () => {
+    api.core_set_lying(1);
+    hold(0, 0, -1000, 800);                    // arm on the mattress, palm down
+    liftTo([0, 0, -1000], [60, 200, 970]);     // above the face, screen down
+    assert.strictEqual(raises, 1);
+  });
+  test('lying view: a palm turned up and resting stays dark', () => {
+    api.core_set_lying(1);
+    hold(0, 0, -1000, 800); move([0, 0, -1000], [60, 200, 970], 400);
+    hold(60, 200, 970, 3000); tremble([60, 200, 970], 200, 4);  // slight twitch at rest
+    assert.strictEqual(raises, 0);
+  });
+  test('lying view off: the same raise stays dark', () => {
+    hold(0, 0, -1000, 800); liftTo([0, 0, -1000], [60, 200, 970]);
+    assert.strictEqual(raises, 0);
+  });
+  test('lying view needs a bigger turn: a small turn into it stays dark', () => {
+    api.core_set_lying(1);
+    hold(0, -700, 714, 800); liftTo([0, -700, 714], [0, -400, 917], 400);
+    assert.strictEqual(raises, 0);
+  });
+  test('lying view does not widen the face-down rejection', () => {
+    api.core_set_lying(1);
+    lower(); hold(0, -700, 714, 2000); assert.strictEqual(raises, 0);
+  });
   test('rev 5 log ~23 degree re-raise from a half-lowered wrist stays dark', () => {
     hold(-35, -227, -1040, 800); move([-35, -227, -1040], [-126, -563, -840]);
     hold(-122, -575, -845, 3000); assert.strictEqual(raises, 0);
@@ -384,11 +442,35 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     startWorker(); api.mock_app_message(1, 0, 0, 0);
     assert.strictEqual(api.mock_off_calls(), 0); assert.strictEqual(api.mock_interaction_calls(), 0);
   });
-  test('timer expiry releases light without retriggering while viewing', () => {
+  test('timer expiry hands the light to the system without retriggering while viewing', () => {
     startWorker({6: 2}); lower(); raise(); api.mock_expire(0);
     assert.strictEqual(api.mock_off_calls(), 1); assert.strictEqual(api.mock_state(), VIEWING);
+    // Buttons pressed in another app keep a system interaction light on; a
+    // plain light_enable(false) here cut it off mid-use.
+    assert.strictEqual(api.mock_interaction_calls(), 1);
     hold(0, -700, -714, 3000); assert.strictEqual(api.mock_on_calls(), 1);
     lower(); raise(); assert.strictEqual(api.mock_on_calls(), 2);
+  });
+  // After the light has gone out, a partly lowered wrist (here ~29 degrees,
+  // between the viewing region and the wide exit region) used to keep the
+  // detector in VIEWING, so every later raise was ignored until a full lowering.
+  test('after the light times out, a partial lowering rearms the next raise', () => {
+    startWorker({6: 2}); lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
+    api.mock_expire(0);
+    move([0, -700, -714], [-110, -485, -868], 300); hold(-110, -485, -868, 200);
+    move([-110, -485, -868], [-138, -1000, -250], 500);
+    assert.strictEqual(api.mock_on_calls(), 2);
+  });
+  test('while the light is still on, a partial lowering keeps it on', () => {
+    startWorker({6: 0}); lower(); raise();
+    move([0, -700, -714], [-110, -485, -868], 300); hold(-110, -485, -868, 2000);
+    assert.strictEqual(api.mock_off_calls(), 0); assert.strictEqual(api.mock_state(), VIEWING);
+  });
+  test('light sensor mode: after the light is surely out, a partial lowering rearms', () => {
+    startWorker({10: 1}); lower(); raise(); hold(0, -700, -714, 11000);
+    move([0, -700, -714], [-110, -485, -868], 300); hold(-110, -485, -868, 200);
+    move([-110, -485, -868], [-138, -1000, -250], 500);
+    assert.strictEqual(api.mock_interaction_calls(), 2);
   });
   test('lowering cancels old timer so it cannot end a subsequent raise', () => {
     startWorker(); lower(); raise(); lower(); assert.strictEqual(api.mock_timer_cancelled(), 1);
@@ -508,6 +590,17 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
   test('worker never sends messages of its own', () => {
     startWorker(); lower(); raise(); api.mock_app_message(3, 0, 0, 0);
     assert.strictEqual(api.mock_sent_type(), -1);
+  });
+  test('worker: lying view only at night, so a daytime palm flip stays dark', () => {
+    api.mock_set_hour(14); startWorker(); hold(0, 0, -1000, 800);
+    move([0, 0, -1000], [60, 200, 970], 600); assert.strictEqual(api.mock_on_calls(), 0);
+    reset(); api.mock_set_hour(23); startWorker(); hold(0, 0, -1000, 800);
+    liftTo([0, 0, -1000], [60, 200, 970]); assert.strictEqual(api.mock_on_calls(), 1);
+  });
+  test('worker: lying view switches on when night starts', () => {
+    api.mock_set_hour(19); startWorker(); api.mock_set_hour(20); api.mock_tick();
+    hold(0, 0, -1000, 800); liftTo([0, 0, -1000], [60, 200, 970]);
+    assert.strictEqual(api.mock_on_calls(), 1);
   });
   test('invalid stored settings fall back to defaults', () => {
     startWorker({6: 999, 13: 7}); lower(); raise();

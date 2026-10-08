@@ -6,3 +6,6 @@ node_modules/
 __pycache__/
 .DS_Store
 Thumbs.db
+
+# Local PebbleOS checkout for the firmware port (its own git repo)
+firmware/

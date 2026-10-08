@@ -29,6 +29,7 @@ static bool s_mock_shared_stamp;
 static int s_persist_values[16];
 static bool s_persist_exists[16];
 static RtwDetector s_core;
+static int s_mock_hour = 12;
 
 void *memset(void *destination, int value, size_t count) {
   unsigned char *bytes = destination;
@@ -90,6 +91,8 @@ void test_app_log(int level, const char *format, ...) {
 void core_init(int confirmations, int rotation_mg) {
   rtw_detector_init(&s_core, confirmations, rotation_mg);
 }
+void core_resume(void) { rtw_detector_resume(&s_core); }
+void core_set_lying(int on) { rtw_detector_set_lying_view(&s_core, on != 0); }
 int core_feed(int x, int y, int z, uint32_t timestamp, int vibrated) {
   return rtw_detector_update(&s_core, x, y, z, timestamp, vibrated != 0);
 }
@@ -101,6 +104,7 @@ void mock_reset(void) {
   s_on_calls = s_off_calls = s_interaction_calls = s_logs = 0;
   s_rate_error = 0;
   s_mock_shared_stamp = false;
+  s_mock_hour = 12;
   s_mock_sent_type = -1;
   s_mock_subscribes = 0;
   s_mock_pending_count = 0;
@@ -129,6 +133,15 @@ void mock_app_message(int type, int data0, int data1, int data2) {
   if (s_mock_message_handler) s_mock_message_handler((uint16_t)type, &message);
 }
 int mock_battery_subscribed(void) { return s_mock_battery_handler != NULL; }
+time_t time(time_t *t) { if (t) *t = 0; return 0; }
+struct tm *localtime(const time_t *t) {
+  static struct tm now;
+  (void)t;
+  now = (struct tm){0};
+  now.tm_hour = s_mock_hour;
+  return &now;
+}
+void mock_set_hour(int hour) { s_mock_hour = hour; }
 void mock_tick(void) { if (s_mock_tick_handler) s_mock_tick_handler(NULL, MINUTE_UNIT); }
 int mock_subscribes(void) { return s_mock_subscribes; }
 int mock_sent_type(void) { return s_mock_sent_type; }

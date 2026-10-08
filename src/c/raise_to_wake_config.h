@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
-#define RTW_DETECTOR_REVISION 9
+#define RTW_DETECTOR_REVISION 10
 // Persistent keys shared by the app and worker. Keys 7 (old callback batch)
 // and 11 (old viewing samples) are retired; Sensitivity replaces both.
 #define RTW_DURATION_PERSIST_KEY 6
@@ -56,6 +56,31 @@
 #define RTW_RETAIN_Y_MAX_MG (-350)
 #define RTW_RETAIN_Z_MIN_MG (-1200)
 #define RTW_RETAIN_Z_MAX_MG 550
+
+// Lying on your back, the screen faces down at you (positive Z). Tighter than
+// the upright region and only used when enabled (at night), since a palm
+// flipped up also faces the screen down.
+#define RTW_LYING_VIEW_X_MIN_MG (-550)
+#define RTW_LYING_VIEW_X_MAX_MG 550
+#define RTW_LYING_VIEW_Y_MIN_MG (-450)
+#define RTW_LYING_VIEW_Y_MAX_MG 600
+#define RTW_LYING_VIEW_Z_MIN_MG 600 // Screen tilted at least ~37 degrees toward the floor.
+#define RTW_LYING_VIEW_Z_MAX_MG 1100
+#define RTW_LYING_RETAIN_X_MIN_MG (-650)
+#define RTW_LYING_RETAIN_X_MAX_MG 650
+#define RTW_LYING_RETAIN_Y_MIN_MG (-600)
+#define RTW_LYING_RETAIN_Y_MAX_MG 750
+#define RTW_LYING_RETAIN_Z_MIN_MG 450
+#define RTW_LYING_RETAIN_Z_MAX_MG 1200
+#define RTW_LYING_ROTATION_MG 600 // ~35 degree turn into the lying view.
+#define RTW_LYING_EXTRA_CONFIRM_SAMPLES 8
+// A watch held up to look trembles with the hand; one resting palm-up on a
+// bed or lap is nearly still. RMS of the sample-to-sample change in motion
+// (second difference, which ignores smooth settling) over the hold.
+#define RTW_LYING_MIN_TREMOR_MG 25
+#define RTW_LYING_TREMOR_SKIP_SAMPLES 2 // Skip the arrival, which still carries the turn.
+#define RTW_LYING_NIGHT_START_HOUR 20 // Lying view from 8 pm...
+#define RTW_LYING_NIGHT_END_HOUR 8     // ...to 8 am.
 
 #define RTW_GRAVITY_FILTER_DIVISOR 2 // Short filter: about one sample of lag.
 #define RTW_GRAVITY_MIN_MG 700

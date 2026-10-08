@@ -13,6 +13,8 @@ static bool s_power_light, s_forced_gesture_light;
 // A light-sensor (system interaction) light we started, and when.
 static bool s_interaction_light;
 static uint64_t s_interaction_light_ms;
+// A light-sensor light's end is up to the system; treat it as out after this.
+static bool s_view_release_pending;
 static AppTimer *s_light_timer;
 static bool s_have_log_time;
 static uint64_t s_last_log_ms;
@@ -46,6 +48,8 @@ static void hand_off_gesture_light(void) {
   release_gesture_light();
   s_interaction_light = false; // Now the user's light: lowering must not cut it.
   if (forced) light_enable_interaction();
+  // The raise's own light is over, so a partly lowered wrist may rearm.
+  rtw_detector_release_view(&s_detector);
 }
 
 // Lowering soon after a light-sensor raise ends that light too, instead of
@@ -60,15 +64,29 @@ static void release_interaction_light(uint64_t now) {
   s_interaction_light = false;
 }
 
+// Looking at the watch lying on your back is only accepted at night: in the
+// day the same screen-down pose is far more often a palm turned up.
+static void update_lying_view(void) {
+  time_t now = time(NULL);
+  struct tm *local = localtime(&now);
+  bool night = local->tm_hour >= RTW_LYING_NIGHT_START_HOUR ||
+               local->tm_hour < RTW_LYING_NIGHT_END_HOUR;
+  rtw_detector_set_lying_view(&s_detector, night);
+}
+
 static void reset_detector(void) {
   rtw_detector_init(&s_detector, RTW_SENSITIVITY_CONFIRM_SAMPLES(s_sensitivity),
                     RTW_SENSITIVITY_ROTATION_MG(s_sensitivity));
+  update_lying_view();
 }
 
 static void light_callback(void *context) {
   (void)context;
   s_light_timer = NULL;
-  release_gesture_light();
+  // Someone may be pressing buttons in another app, which the worker cannot
+  // see: switching the light off would cut it mid-use. Hand it to the
+  // system's interaction timeout, which button presses keep extending.
+  hand_off_gesture_light();
   // A duration expiry does not unlock VIEWING. Lowering is still required.
 }
 
@@ -76,10 +94,12 @@ static void start_interaction_light(uint64_t now) {
   light_enable_interaction();
   s_interaction_light = true;
   s_interaction_light_ms = now;
+  s_view_release_pending = true;
 }
 
 static void activate_gesture_light(uint64_t now) {
   cancel_light_timer();
+  s_view_release_pending = false;
   if (s_ambient) {
     start_interaction_light(now);
   } else {
@@ -108,6 +128,11 @@ static void handle_accel(AccelData *data, uint32_t num_samples) {
     uint64_t timestamp = sample->timestamp;
     if (i && timestamp <= previous) timestamp = previous + RTW_SAMPLE_INTERVAL_MS;
     previous = timestamp;
+    if (s_view_release_pending &&
+        timestamp - s_interaction_light_ms >= RTW_INTERACTION_RELEASE_MS) {
+      s_view_release_pending = false;
+      rtw_detector_release_view(&s_detector);
+    }
     RtwState before = s_detector.state;
     RtwEvent event = rtw_detector_update(&s_detector, sample->x, sample->y, sample->z,
                                         timestamp, sample->did_vibrate);
@@ -209,6 +234,7 @@ static void subscribe_accel(void) {
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   (void)tick_time;
   (void)units_changed;
+  update_lying_view();
   if (!s_samples_since_tick) {
     APP_LOG(APP_LOG_LEVEL_WARNING, "RTW no motion data for a minute; reconnecting");
     accel_data_service_unsubscribe();
@@ -229,7 +255,7 @@ static void worker_init(void) {
                    (persist_read_bool(RTW_PLUGGED_PERSIST_KEY) ? RTW_SETTING_PLUGGED : 0) |
                    (persist_read_bool(RTW_AMBIENT_PERSIST_KEY) ? RTW_SETTING_AMBIENT : 0) |
                    (persist_read_bool(RTW_LOGGING_PERSIST_KEY) ? RTW_SETTING_LOGGING : 0);
-  s_power_light = s_forced_gesture_light = s_interaction_light = false;
+  s_power_light = s_forced_gesture_light = s_interaction_light = s_view_release_pending = false;
   s_have_log_time = false;
   s_samples_since_tick = 0;
   apply_settings((uint32_t)duration, (unsigned)sensitivity, flags, true);
