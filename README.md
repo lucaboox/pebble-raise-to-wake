@@ -135,3 +135,7 @@ node tests/raise_to_wake.test.js
 ```
 
 This compiles the actual C detector and worker into WebAssembly with a small SDK shim, then exercises gesture latency, log-derived viewing endpoints, shallow typing poses and acceleration bursts, settled-reference maintenance, hysteresis, cooldown, lowering, walking-like traces, timeout recovery, opposing gravity vectors, impacts, vibration, sample gaps, settings, timer lifecycle, ambient mode and charging behavior. All 87 checks passed. It is not a Pebble SDK build or a substitute for real-wrist traces.
+
+## License
+
+MIT; see [LICENSE](LICENSE). Anyone may use, modify and redistribute this code, including in PebbleOS, as long as the copyright notice is kept. The project started from [rajid/pebble_backlight](https://github.com/rajid/pebble_backlight), whose idea and worker approach it builds on; its code has since been rewritten. `wscript` is the Pebble SDK's default build script. The raise detector (`worker_src/c/raise_to_wake_detector.c`, `.h` and `src/c/raise_to_wake_config.h`) has no Pebble API dependencies and is meant to be reusable on its own.
