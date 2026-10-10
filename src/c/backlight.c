@@ -8,6 +8,9 @@
 #define STOP_MINUTE   3
 #define SCHEDULE      14
 #define STARTED_ONCE  15 // Set after the first launch has started the worker.
+#define POSITION_COUNT 19 // Number of recorded positions, then the positions themselves.
+#define POSITION_FIRST 20
+#define MAX_POSITIONS  8
 
 #define TIME_START 0 // Wakeup cookies; the worker is started / stopped at these.
 #define TIME_STOP  1
@@ -288,6 +291,193 @@ static void open_picker(int which) {
 
 
 /****************************************************************************
+ * Record position: capture where the wrist is, to tune what counts as looking
+ ****************************************************************************/
+
+typedef struct { int16_t x, y, z; } Position;
+
+#define COUNTDOWN_SECONDS 3
+#define RECORD_SAMPLES 25 // One second at 25 Hz, averaged.
+
+static Window *s_record_window;
+static TextLayer *s_record_text;
+static AppTimer *s_record_timer;
+static int s_countdown;
+static int32_t s_sum_x, s_sum_y, s_sum_z;
+static int s_sample_count;
+static char s_record_buffer[96];
+
+static bool in_box(Position p, int x0, int x1, int y0, int y1, int z0, int z1) {
+  return p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1 && p.z >= z0 && p.z <= z1;
+}
+
+// Same regions as the detector: viewing, lowered (outside the wider exit region), or between.
+static const char *classify(Position p) {
+  if (in_box(p, RTW_VIEW_X_MIN_MG, RTW_VIEW_X_MAX_MG, RTW_VIEW_Y_MIN_MG, RTW_VIEW_Y_MAX_MG,
+             RTW_VIEW_Z_MIN_MG, RTW_VIEW_Z_MAX_MG)) {
+    return "viewing";
+  }
+  if (in_box(p, RTW_LYING_VIEW_X_MIN_MG, RTW_LYING_VIEW_X_MAX_MG, RTW_LYING_VIEW_Y_MIN_MG,
+             RTW_LYING_VIEW_Y_MAX_MG, RTW_LYING_VIEW_Z_MIN_MG, RTW_LYING_VIEW_Z_MAX_MG)) {
+    return "bed view";
+  }
+  if (in_box(p, RTW_RETAIN_X_MIN_MG, RTW_RETAIN_X_MAX_MG, RTW_RETAIN_Y_MIN_MG, RTW_RETAIN_Y_MAX_MG,
+             RTW_RETAIN_Z_MIN_MG, RTW_RETAIN_Z_MAX_MG)) {
+    return "between";
+  }
+  return "lowered";
+}
+
+static int position_count(void) {
+  int count = persist_exists(POSITION_COUNT) ? (int)persist_read_int(POSITION_COUNT) : 0;
+  return (count < 0 || count > MAX_POSITIONS) ? 0 : count;
+}
+
+static void save_position(Position p) {
+  int count = position_count();
+  if (count == MAX_POSITIONS) { // Drop the oldest.
+    for (int i = 1; i < MAX_POSITIONS; ++i) {
+      Position older;
+      persist_read_data(POSITION_FIRST + i, &older, sizeof(older));
+      persist_write_data(POSITION_FIRST + i - 1, &older, sizeof(older));
+    }
+    count--;
+  }
+  persist_write_data(POSITION_FIRST + count, &p, sizeof(p));
+  persist_write_int(POSITION_COUNT, count + 1);
+}
+
+static void record_accel(AccelData *data, uint32_t num_samples) {
+  for (uint32_t i = 0; i < num_samples && s_sample_count < RECORD_SAMPLES; ++i) {
+    s_sum_x += data[i].x;
+    s_sum_y += data[i].y;
+    s_sum_z += data[i].z;
+    s_sample_count++;
+  }
+  if (s_sample_count < RECORD_SAMPLES) return;
+  accel_data_service_unsubscribe();
+  Position p = {s_sum_x / s_sample_count, s_sum_y / s_sample_count, s_sum_z / s_sample_count};
+  save_position(p);
+  vibes_double_pulse();
+  APP_LOG(APP_LOG_LEVEL_INFO, "RTW position %d,%d,%d %s", p.x, p.y, p.z, classify(p));
+  snprintf(s_record_buffer, sizeof(s_record_buffer), "Saved #%d\n%d, %d, %d\n%s",
+           position_count(), p.x, p.y, p.z, classify(p));
+  text_layer_set_text(s_record_text, s_record_buffer);
+}
+
+static void countdown_tick(void *context) {
+  s_record_timer = NULL;
+  if (s_countdown > 0) {
+    snprintf(s_record_buffer, sizeof(s_record_buffer), "Hold your wrist where you want it\n\n%d",
+             s_countdown--);
+    text_layer_set_text(s_record_text, s_record_buffer);
+    s_record_timer = app_timer_register(1000, countdown_tick, NULL);
+    return;
+  }
+  vibes_short_pulse();
+  text_layer_set_text(s_record_text, "Recording...\nkeep still");
+  s_sum_x = s_sum_y = s_sum_z = 0;
+  s_sample_count = 0;
+  accel_data_service_subscribe(5, record_accel);
+  accel_service_set_sampling_rate(ACCEL_SAMPLING_25HZ);
+}
+
+static void record_load(Window *window) {
+  Layer *root = window_get_root_layer(window);
+  GRect bounds = layer_get_bounds(root);
+  s_record_text = text_layer_create(GRect(4, bounds.size.h / 2 - 50, bounds.size.w - 8, 100));
+  text_layer_set_font(s_record_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  text_layer_set_text_alignment(s_record_text, GTextAlignmentCenter);
+  layer_add_child(root, text_layer_get_layer(s_record_text));
+  s_countdown = COUNTDOWN_SECONDS;
+  countdown_tick(NULL);
+}
+
+static void record_unload(Window *window) {
+  if (s_record_timer) app_timer_cancel(s_record_timer);
+  s_record_timer = NULL;
+  accel_data_service_unsubscribe();
+  text_layer_destroy(s_record_text);
+  window_destroy(s_record_window);
+  s_record_window = NULL;
+}
+
+static void open_record(void) {
+  s_record_window = window_create();
+  window_set_window_handlers(s_record_window, (WindowHandlers) {
+    .load = record_load,
+    .unload = record_unload,
+  });
+  window_stack_push(s_record_window, true);
+}
+
+// Saved positions: a scrolling list; hold Select to clear.
+static Window *s_positions_window;
+static ScrollLayer *s_positions_scroll;
+static TextLayer *s_positions_text;
+static char s_positions_buffer[MAX_POSITIONS * 32 + 40];
+
+static void fill_positions(void) {
+  int count = position_count();
+  int len = snprintf(s_positions_buffer, sizeof(s_positions_buffer), "%s",
+                     count ? "x, y, z (hold Select to clear)\n" : "None yet.\nUse Record position.");
+  for (int i = 0; i < count && len < (int)sizeof(s_positions_buffer); ++i) {
+    Position p;
+    persist_read_data(POSITION_FIRST + i, &p, sizeof(p));
+    len += snprintf(s_positions_buffer + len, sizeof(s_positions_buffer) - len,
+                    "%d: %d, %d, %d %s\n", i + 1, p.x, p.y, p.z, classify(p));
+    // Also to the app log, so the list can be copied from a log session.
+    APP_LOG(APP_LOG_LEVEL_INFO, "RTW saved position %d: %d,%d,%d %s", i + 1, p.x, p.y, p.z,
+            classify(p));
+  }
+  text_layer_set_text(s_positions_text, s_positions_buffer);
+  GSize size = text_layer_get_content_size(s_positions_text);
+  scroll_layer_set_content_size(s_positions_scroll, GSize(size.w, size.h + 8));
+}
+
+static void clear_positions(ClickRecognizerRef recognizer, void *context) {
+  persist_write_int(POSITION_COUNT, 0);
+  vibes_short_pulse();
+  fill_positions();
+}
+
+static void positions_click_config(void *context) {
+  window_long_click_subscribe(BUTTON_ID_SELECT, 700, clear_positions, NULL);
+}
+
+static void positions_load(Window *window) {
+  Layer *root = window_get_root_layer(window);
+  GRect bounds = layer_get_bounds(root);
+  s_positions_scroll = scroll_layer_create(bounds);
+  scroll_layer_set_callbacks(s_positions_scroll, (ScrollLayerCallbacks) {
+    .click_config_provider = positions_click_config,
+  });
+  scroll_layer_set_click_config_onto_window(s_positions_scroll, window);
+  s_positions_text = text_layer_create(GRect(4, 0, bounds.size.w - 8, 2000));
+  text_layer_set_font(s_positions_text, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  scroll_layer_add_child(s_positions_scroll, text_layer_get_layer(s_positions_text));
+  layer_add_child(root, scroll_layer_get_layer(s_positions_scroll));
+  fill_positions();
+}
+
+static void positions_unload(Window *window) {
+  text_layer_destroy(s_positions_text);
+  scroll_layer_destroy(s_positions_scroll);
+  window_destroy(s_positions_window);
+  s_positions_window = NULL;
+}
+
+static void open_positions(void) {
+  s_positions_window = window_create();
+  window_set_window_handlers(s_positions_window, (WindowHandlers) {
+    .load = positions_load,
+    .unload = positions_unload,
+  });
+  window_stack_push(s_positions_window, true);
+}
+
+
+/****************************************************************************
  * Settings menu
  ****************************************************************************/
 
@@ -295,7 +485,7 @@ typedef enum {
   ROW_ENABLED, ROW_SENSITIVITY,
   ROW_DURATION, ROW_SENSOR, ROW_CHARGER,
   ROW_SCHEDULE, ROW_START, ROW_STOP, ROW_SLEEP_PAUSE,
-  ROW_LOGGING,
+  ROW_LOGGING, ROW_RECORD, ROW_POSITIONS,
 } Row;
 
 enum { SECTION_WAKE, SECTION_LIGHT, SECTION_SCHEDULE, SECTION_ADVANCED, NUM_SECTIONS };
@@ -310,7 +500,7 @@ static Row row_at(MenuIndex *index) {
       const int time_rows = s_schedule ? 3 : 1;
       return index->row < time_rows ? ROW_SCHEDULE + index->row : ROW_SLEEP_PAUSE;
     }
-    default: return ROW_LOGGING;
+    default: return ROW_LOGGING + index->row;
   }
 }
 
@@ -321,7 +511,7 @@ static uint16_t get_num_rows(MenuLayer *menu, uint16_t section, void *context) {
     case SECTION_WAKE: return 2;
     case SECTION_LIGHT: return 3;
     case SECTION_SCHEDULE: return (s_schedule ? 3 : 1) + HAS_SLEEP_PAUSE; // Times only when in use.
-    default: return 1;
+    default: return 3; // Logging, record position, saved positions.
   }
 }
 
@@ -428,6 +618,14 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *c
     case ROW_LOGGING:
       title = "Logging"; subtitle = s_logging ? "Uses battery" : "For tuning"; toggle = s_logging;
       break;
+    case ROW_RECORD:
+      title = "Record position"; subtitle = "Where it should wake";
+      break;
+    case ROW_POSITIONS:
+      title = "Saved positions";
+      snprintf(value, sizeof(value), "%d saved", position_count());
+      subtitle = value;
+      break;
   }
 
 #if defined(PBL_ROUND)
@@ -506,6 +704,12 @@ static void select_click(MenuLayer *menu, MenuIndex *index, void *context) {
       persist_write_bool(RTW_LOGGING_PERSIST_KEY, s_logging);
       send_settings();
       break;
+    case ROW_RECORD:
+      open_record();
+      return;
+    case ROW_POSITIONS:
+      open_positions();
+      return;
   }
   menu_layer_reload_data(menu);
 }

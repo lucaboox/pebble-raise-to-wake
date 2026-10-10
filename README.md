@@ -48,6 +48,7 @@ Opening the app goes straight to one settings menu (no intermediate screen). Tog
 | **Schedule** | When on, raise to wake runs only between **Turn on at** and **Turn off at**, which appear underneath. Times use the watch's 12/24-hour setting and a boxed picker like the built-in Alarms app (Up/Down change, Select next, Back previous) | 14, 0–3 |
 | **Sleep pause** | Off / Deep sleep / Any sleep: stop sampling while Pebble Health reports (restful) sleep and start again on waking, an automatic alternative to the schedule. Health marks sleep only after a while and notices waking just as slowly, so a raise right after waking may be ignored for a few minutes; *Deep sleep* keeps raises working in light sleep. Needs Health (not on the original Pebble) | 16 |
 | **Logging** | Debug logging, off by default. Off, the worker prints only its startup line | 12 |
+| **Record position** / **Saved positions** | Counts down 3 s, then averages 1 s of accelerometer data and saves the pose (last 8 kept, keys 19-27), labelled *viewing*, *bed view*, *between* or *lowered* by the current tuning. Hold a pose that should (or should not) wake the screen, record it, and share the list to tune the regions without collecting logs. Hold Select in the list to clear it | 19-27 |
 
 Keys 7 (old callback batching) and 11 (old viewing samples) are no longer read.
 
