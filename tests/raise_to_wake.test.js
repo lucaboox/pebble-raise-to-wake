@@ -602,6 +602,41 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     hold(0, 0, -1000, 800); liftTo([0, 0, -1000], [60, 200, 970]);
     assert.strictEqual(api.mock_on_calls(), 1);
   });
+  // Sleep pause: an automatic alternative to the schedule, from Pebble Health.
+  const SLEEP = 1, RESTFUL = 2;
+  test('sleep pause off: raises work while Health says asleep', () => {
+    startWorker(); api.mock_set_activities(SLEEP | RESTFUL, 0);
+    assert.strictEqual(api.mock_health_subscribed(), 0);
+    lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
+  });
+  test('any sleep: paused with the sensor off while asleep, back on waking', () => {
+    startWorker({16: 2}); assert.strictEqual(api.mock_health_subscribed(), 1);
+    api.mock_set_activities(SLEEP, 0); assert.strictEqual(api.mock_has_subscription(), 0);
+    lower(); raise(); assert.strictEqual(api.mock_on_calls(), 0);
+    api.mock_set_activities(0, 0); assert.strictEqual(api.mock_has_subscription(), 1);
+    lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
+  });
+  test('deep sleep: light sleep keeps raises, restful sleep pauses', () => {
+    startWorker({16: 1}); api.mock_set_activities(SLEEP, 0);
+    assert.strictEqual(api.mock_has_subscription(), 1);
+    lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
+    api.mock_set_activities(SLEEP | RESTFUL, 0); assert.strictEqual(api.mock_has_subscription(), 0);
+  });
+  test('stall watchdog does not reconnect the sensor while paused', () => {
+    startWorker({16: 2}); api.mock_set_activities(SLEEP, 0);
+    const subscribes = api.mock_subscribes(); api.mock_tick(); api.mock_tick();
+    assert.strictEqual(api.mock_subscribes(), subscribes); assert.strictEqual(api.mock_has_subscription(), 0);
+  });
+  test('minute tick catches a sleep change Health did not announce', () => {
+    startWorker({16: 2}); api.mock_set_activities(SLEEP, 1); api.mock_tick();
+    assert.strictEqual(api.mock_has_subscription(), 0);
+  });
+  test('sleep pause can be switched on live from the app', () => {
+    startWorker(); api.mock_set_activities(SLEEP, 0);
+    api.mock_app_message(2, 5, 1, 2 << 4); assert.strictEqual(api.mock_has_subscription(), 0);
+    api.mock_app_message(2, 5, 1, 0); assert.strictEqual(api.mock_has_subscription(), 1);
+    assert.strictEqual(api.mock_health_subscribed(), 0);
+  });
   test('invalid stored settings fall back to defaults', () => {
     startWorker({6: 999, 13: 7}); lower(); raise();
     assert.strictEqual(api.mock_on_calls(), 1); assert.strictEqual(api.mock_timer_duration(0), 5000);

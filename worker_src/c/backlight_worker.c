@@ -20,6 +20,10 @@ static bool s_have_log_time;
 static uint64_t s_last_log_ms;
 // Samples since the last minute tick, so a stalled motion stream is noticed.
 static uint32_t s_samples_since_tick;
+// Sleep pause: while Pebble Health reports sleep, stop sampling entirely.
+static unsigned s_sleep_pause;
+static bool s_sleep_paused;
+static void update_sleep_pause(void);
 
 // Formatting and queueing log lines costs battery even with no phone listening.
 #define RTW_LOG(level, ...) do { if (s_logging) APP_LOG(level, __VA_ARGS__); } while (0)
@@ -182,6 +186,13 @@ static void battery_handler(BatteryChargeState charge) {
   RTW_LOG(APP_LOG_LEVEL_INFO, "RTW charging/powered override %s", power_light ? "on" : "released");
 }
 
+#if defined(PBL_HEALTH)
+static void health_handler(HealthEventType event, void *context) {
+  (void)context;
+  if (event == HealthEventSleepUpdate || event == HealthEventSignificantUpdate) update_sleep_pause();
+}
+#endif
+
 // Used at startup (from storage) and when the app changes a setting, so the
 // worker never has to be restarted. Only a sensitivity change resets gesture
 // tracking; an active gesture light keeps its current timer.
@@ -196,6 +207,19 @@ static void apply_settings(uint32_t duration, unsigned sensitivity, unsigned fla
   }
   s_ambient = flags & RTW_SETTING_AMBIENT;
   s_logging = flags & RTW_SETTING_LOGGING;
+#if defined(PBL_HEALTH)
+  unsigned sleep_pause = (flags & RTW_SETTING_SLEEP_MASK) >> RTW_SETTING_SLEEP_SHIFT;
+  if (sleep_pause > RTW_SLEEP_PAUSE_ANY) sleep_pause = RTW_SLEEP_PAUSE_OFF;
+  bool was_watching = !startup && s_sleep_pause != RTW_SLEEP_PAUSE_OFF;
+  s_sleep_pause = sleep_pause;
+  if (s_sleep_pause != RTW_SLEEP_PAUSE_OFF && !was_watching) {
+    health_service_events_subscribe(health_handler, NULL);
+  } else if (s_sleep_pause == RTW_SLEEP_PAUSE_OFF && was_watching) {
+    health_service_events_unsubscribe();
+  }
+  // At startup the sensor is not subscribed yet; worker_init checks once it is.
+  if (!startup) update_sleep_pause();
+#endif
   bool watched = !startup && (s_charging_enabled || s_plugged_enabled);
   s_charging_enabled = flags & RTW_SETTING_CHARGING;
   s_plugged_enabled = flags & RTW_SETTING_PLUGGED;
@@ -231,11 +255,37 @@ static void subscribe_accel(void) {
 // Motion data arrives about 12 times a second, so a whole minute without any
 // means the stream has stalled (firmware can reconfigure the sensor, e.g. when
 // Motion Backlight is switched). Reconnect rather than stay silently dead.
+// Stop or restart sampling to match Pebble Health. Health only marks sleep
+// once it has lasted a while, and is as slow to notice waking up.
+static void update_sleep_pause(void) {
+#if defined(PBL_HEALTH)
+  bool paused = false;
+  if (s_sleep_pause != RTW_SLEEP_PAUSE_OFF) {
+    HealthActivityMask activities = health_service_peek_current_activities();
+    HealthActivityMask pausing = (s_sleep_pause == RTW_SLEEP_PAUSE_DEEP) ?
+        HealthActivityRestfulSleep : (HealthActivitySleep | HealthActivityRestfulSleep);
+    paused = (activities & pausing) != 0;
+  }
+  if (paused == s_sleep_paused) return;
+  s_sleep_paused = paused;
+  if (paused) {
+    accel_data_service_unsubscribe();
+    release_gesture_light();
+  } else {
+    subscribe_accel();
+    reset_detector();
+    s_samples_since_tick = 0;
+  }
+  RTW_LOG(APP_LOG_LEVEL_INFO, "RTW %s", paused ? "paused: asleep" : "resumed: awake");
+#endif
+}
+
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   (void)tick_time;
   (void)units_changed;
   update_lying_view();
-  if (!s_samples_since_tick) {
+  update_sleep_pause(); // In case Health did not announce the change.
+  if (!s_sleep_paused && !s_samples_since_tick) {
     APP_LOG(APP_LOG_LEVEL_WARNING, "RTW no motion data for a minute; reconnecting");
     accel_data_service_unsubscribe();
     subscribe_accel();
@@ -254,8 +304,12 @@ static void worker_init(void) {
   unsigned flags = (persist_read_bool(RTW_CHARGING_PERSIST_KEY) ? RTW_SETTING_CHARGING : 0) |
                    (persist_read_bool(RTW_PLUGGED_PERSIST_KEY) ? RTW_SETTING_PLUGGED : 0) |
                    (persist_read_bool(RTW_AMBIENT_PERSIST_KEY) ? RTW_SETTING_AMBIENT : 0) |
-                   (persist_read_bool(RTW_LOGGING_PERSIST_KEY) ? RTW_SETTING_LOGGING : 0);
+                   (persist_read_bool(RTW_LOGGING_PERSIST_KEY) ? RTW_SETTING_LOGGING : 0) |
+                   (((unsigned)persist_read_int(RTW_SLEEP_PAUSE_PERSIST_KEY) << RTW_SETTING_SLEEP_SHIFT) &
+                    RTW_SETTING_SLEEP_MASK);
   s_power_light = s_forced_gesture_light = s_interaction_light = s_view_release_pending = false;
+  s_sleep_paused = false;
+  s_sleep_pause = RTW_SLEEP_PAUSE_OFF;
   s_have_log_time = false;
   s_samples_since_tick = 0;
   apply_settings((uint32_t)duration, (unsigned)sensitivity, flags, true);
@@ -263,6 +317,7 @@ static void worker_init(void) {
   subscribe_accel();
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   app_worker_message_subscribe(app_message_handler);
+  update_sleep_pause();
   // Always printed once, so a log session can confirm which build is running.
   APP_LOG(APP_LOG_LEVEL_INFO, "RTW rev=%u rate=%u Hz batch=%u sensitivity=%u duration=%lu s ambient=%d log=%d",
           (unsigned)RTW_DETECTOR_REVISION, (unsigned)RTW_ACCEL_SAMPLING_RATE,
@@ -274,6 +329,9 @@ static void worker_deinit(void) {
   accel_data_service_unsubscribe();
   tick_timer_service_unsubscribe();
   app_worker_message_unsubscribe();
+#if defined(PBL_HEALTH)
+  if (s_sleep_pause != RTW_SLEEP_PAUSE_OFF) health_service_events_unsubscribe();
+#endif
   if (s_charging_enabled || s_plugged_enabled) battery_state_service_unsubscribe();
   // The app stops the worker while the user is changing settings.
   hand_off_gesture_light();

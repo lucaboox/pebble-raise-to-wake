@@ -26,10 +26,12 @@ static BatteryChargeState s_mock_battery;
 static AccelData s_mock_pending[8];
 static uint32_t s_mock_pending_count;
 static bool s_mock_shared_stamp;
-static int s_persist_values[16];
-static bool s_persist_exists[16];
+static int s_persist_values[20];
+static bool s_persist_exists[20];
 static RtwDetector s_core;
 static int s_mock_hour = 12;
+static HealthEventHandler s_mock_health_handler;
+static HealthActivityMask s_mock_activities;
 
 void *memset(void *destination, int value, size_t count) {
   unsigned char *bytes = destination;
@@ -76,7 +78,7 @@ bool app_timer_cancel(AppTimer *timer) {
   ++s_timer_cancellations;
   return active;
 }
-bool persist_exists(uint32_t key) { return key < 16 && s_persist_exists[key]; }
+bool persist_exists(uint32_t key) { return key < 20 && s_persist_exists[key]; }
 int32_t persist_read_int(uint32_t key) { return persist_exists(key) ? s_persist_values[key] : 0; }
 bool persist_read_bool(uint32_t key) { return persist_read_int(key) != 0; }
 void worker_event_loop(void) {}
@@ -105,11 +107,12 @@ void mock_reset(void) {
   s_rate_error = 0;
   s_mock_shared_stamp = false;
   s_mock_hour = 12;
+  s_mock_activities = 0;
   s_mock_sent_type = -1;
   s_mock_subscribes = 0;
   s_mock_pending_count = 0;
   s_mock_battery = (BatteryChargeState){0};
-  for (unsigned i = 0; i < 16; ++i) s_persist_exists[i] = false;
+  for (unsigned i = 0; i < 20; ++i) s_persist_exists[i] = false;
   for (unsigned i = 0; i < 16; ++i) s_mock_timers[i].active = false;
 }
 void mock_setting(int key, int value) { s_persist_values[key] = value; s_persist_exists[key] = true; }
@@ -142,6 +145,19 @@ struct tm *localtime(const time_t *t) {
   return &now;
 }
 void mock_set_hour(int hour) { s_mock_hour = hour; }
+bool health_service_events_subscribe(HealthEventHandler handler, void *context) {
+  (void)context;
+  s_mock_health_handler = handler;
+  return true;
+}
+bool health_service_events_unsubscribe(void) { s_mock_health_handler = NULL; return true; }
+HealthActivityMask health_service_peek_current_activities(void) { return s_mock_activities; }
+// Change what Health reports; notify like the real service unless silent.
+void mock_set_activities(int mask, int silent) {
+  s_mock_activities = (HealthActivityMask)mask;
+  if (!silent && s_mock_health_handler) s_mock_health_handler(HealthEventSleepUpdate, NULL);
+}
+int mock_health_subscribed(void) { return s_mock_health_handler != NULL; }
 void mock_tick(void) { if (s_mock_tick_handler) s_mock_tick_handler(NULL, MINUTE_UNIT); }
 int mock_subscribes(void) { return s_mock_subscribes; }
 int mock_sent_type(void) { return s_mock_sent_type; }

@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
-#define RTW_DETECTOR_REVISION 10
+#define RTW_DETECTOR_REVISION 11
 // Persistent keys shared by the app and worker. Keys 7 (old callback batch)
 // and 11 (old viewing samples) are retired; Sensitivity replaces both.
 #define RTW_DURATION_PERSIST_KEY 6
@@ -10,6 +10,7 @@
 #define RTW_AMBIENT_PERSIST_KEY 10
 #define RTW_LOGGING_PERSIST_KEY 12 // Debug logging; off unless enabled in the app.
 #define RTW_SENSITIVITY_PERSIST_KEY 13
+#define RTW_SLEEP_PAUSE_PERSIST_KEY 16 // Keys 14 and 15 are the app's schedule and first run.
 #define RTW_ACCEL_SAMPLING_RATE ACCEL_SAMPLING_25HZ
 #define RTW_SAMPLE_INTERVAL_MS 40 // Must match RTW_ACCEL_SAMPLING_RATE.
 // Two samples per callback halves worker wake-ups for at most 40 ms delivery delay.
@@ -23,6 +24,12 @@
 #define RTW_SETTING_PLUGGED 2
 #define RTW_SETTING_AMBIENT 4
 #define RTW_SETTING_LOGGING 8
+// Bits 4-5 of the flags: pause while Pebble Health says you are asleep.
+#define RTW_SETTING_SLEEP_SHIFT 4
+#define RTW_SETTING_SLEEP_MASK (3 << RTW_SETTING_SLEEP_SHIFT)
+#define RTW_SLEEP_PAUSE_OFF 0
+#define RTW_SLEEP_PAUSE_DEEP 1 // Only during restful (deep) sleep.
+#define RTW_SLEEP_PAUSE_ANY 2  // During any sleep.
 
 // Sensitivity: how far the wrist must turn, and how long the view must hold.
 #define RTW_SENSITIVITY_HIGH 0   // ~19 degrees, 3 samples

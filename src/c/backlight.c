@@ -27,6 +27,13 @@
 static const uint8_t s_durations[] = {3, 5, 8, 10, 15, 30, 0}; // 0 = until lowered
 static const char *s_sensitivity_names[] = {"High", "Normal", "Low"};
 static const char *s_charger_names[] = {"Off", "While charging", "Plugged in"};
+static const char *s_sleep_pause_names[] = {"Off", "Deep sleep", "Any sleep"};
+// Sleep pause needs Pebble Health, which not every watch has.
+#if defined(PBL_HEALTH)
+#define HAS_SLEEP_PAUSE 1
+#else
+#define HAS_SLEEP_PAUSE 0
+#endif
 
 static Window *s_window;
 static MenuLayer *s_menu;
@@ -35,6 +42,7 @@ static AppTimer *s_refresh_timer;
 static bool s_worker_on, s_ambient, s_logging, s_charging, s_plugged, s_schedule;
 static int s_duration = RTW_DEFAULT_LIGHT_DURATION_SECONDS;
 static int s_sensitivity = RTW_DEFAULT_SENSITIVITY;
+static int s_sleep_pause = RTW_SLEEP_PAUSE_OFF;
 static int s_start_hour = 7, s_start_min = 0, s_stop_hour = 23, s_stop_min = 0;
 
 
@@ -60,6 +68,10 @@ static void load_settings(void) {
   s_ambient = persist_read_bool(RTW_AMBIENT_PERSIST_KEY);
   s_logging = persist_read_bool(RTW_LOGGING_PERSIST_KEY);
   s_schedule = persist_read_bool(SCHEDULE);
+  s_sleep_pause = read_int(RTW_SLEEP_PAUSE_PERSIST_KEY, RTW_SLEEP_PAUSE_OFF);
+  if (s_sleep_pause < RTW_SLEEP_PAUSE_OFF || s_sleep_pause > RTW_SLEEP_PAUSE_ANY) {
+    s_sleep_pause = RTW_SLEEP_PAUSE_OFF;
+  }
   s_start_hour = read_int(START_HOUR, 7) % 24;
   s_start_min = read_int(START_MINUTE, 0) % 60;
   s_stop_hour = read_int(STOP_HOUR, 23) % 24;
@@ -73,7 +85,8 @@ static void send_settings(void) {
     .data0 = (uint16_t)s_duration,
     .data1 = (uint16_t)s_sensitivity,
     .data2 = (s_charging ? RTW_SETTING_CHARGING : 0) | (s_plugged ? RTW_SETTING_PLUGGED : 0) |
-             (s_ambient ? RTW_SETTING_AMBIENT : 0) | (s_logging ? RTW_SETTING_LOGGING : 0),
+             (s_ambient ? RTW_SETTING_AMBIENT : 0) | (s_logging ? RTW_SETTING_LOGGING : 0) |
+             ((s_sleep_pause << RTW_SETTING_SLEEP_SHIFT) & RTW_SETTING_SLEEP_MASK),
   };
   app_worker_send_message(RTW_MSG_SETTINGS, &message);
 }
@@ -281,7 +294,7 @@ static void open_picker(int which) {
 typedef enum {
   ROW_ENABLED, ROW_SENSITIVITY,
   ROW_DURATION, ROW_SENSOR, ROW_CHARGER,
-  ROW_SCHEDULE, ROW_START, ROW_STOP,
+  ROW_SCHEDULE, ROW_START, ROW_STOP, ROW_SLEEP_PAUSE,
   ROW_LOGGING,
 } Row;
 
@@ -292,7 +305,11 @@ static Row row_at(MenuIndex *index) {
   switch (index->section) {
     case SECTION_WAKE: return ROW_ENABLED + index->row;
     case SECTION_LIGHT: return ROW_DURATION + index->row;
-    case SECTION_SCHEDULE: return ROW_SCHEDULE + index->row;
+    case SECTION_SCHEDULE: {
+      // Schedule, its two times when in use, then sleep pause.
+      const int time_rows = s_schedule ? 3 : 1;
+      return index->row < time_rows ? ROW_SCHEDULE + index->row : ROW_SLEEP_PAUSE;
+    }
     default: return ROW_LOGGING;
   }
 }
@@ -303,7 +320,7 @@ static uint16_t get_num_rows(MenuLayer *menu, uint16_t section, void *context) {
   switch (section) {
     case SECTION_WAKE: return 2;
     case SECTION_LIGHT: return 3;
-    case SECTION_SCHEDULE: return s_schedule ? 3 : 1; // Times only when in use.
+    case SECTION_SCHEDULE: return (s_schedule ? 3 : 1) + HAS_SLEEP_PAUSE; // Times only when in use.
     default: return 1;
   }
 }
@@ -396,6 +413,9 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *c
         subtitle = "Runs all day";
       }
       break;
+    case ROW_SLEEP_PAUSE:
+      title = "Sleep pause"; subtitle = s_sleep_pause_names[s_sleep_pause];
+      break;
     case ROW_START:
     case ROW_STOP: {
       bool start = row_at(index) == ROW_START;
@@ -476,6 +496,11 @@ static void select_click(MenuLayer *menu, MenuIndex *index, void *context) {
     case ROW_STOP:
       open_picker(TIME_STOP);
       return;
+    case ROW_SLEEP_PAUSE:
+      s_sleep_pause = (s_sleep_pause + 1) % ARRAY_LENGTH(s_sleep_pause_names);
+      persist_write_int(RTW_SLEEP_PAUSE_PERSIST_KEY, s_sleep_pause);
+      send_settings();
+      break;
     case ROW_LOGGING:
       s_logging = !s_logging;
       persist_write_bool(RTW_LOGGING_PERSIST_KEY, s_logging);

@@ -28,6 +28,14 @@ struct tm { int tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_y
 typedef long long time_t;
 time_t time(time_t *t);
 struct tm *localtime(const time_t *t);
+#define PBL_HEALTH 1
+typedef uint32_t HealthActivityMask;
+typedef enum { HealthActivityNone = 0, HealthActivitySleep = 1 << 0, HealthActivityRestfulSleep = 1 << 1 } HealthActivity;
+typedef enum { HealthEventSignificantUpdate = 0, HealthEventMovementUpdate = 1, HealthEventSleepUpdate = 2 } HealthEventType;
+typedef void (*HealthEventHandler)(HealthEventType event, void *context);
+bool health_service_events_subscribe(HealthEventHandler handler, void *context);
+bool health_service_events_unsubscribe(void);
+HealthActivityMask health_service_peek_current_activities(void);
 typedef enum { SECOND_UNIT = 1, MINUTE_UNIT = 2 } TimeUnits;
 typedef void (*TickHandler)(struct tm *tick_time, TimeUnits units_changed);
 void tick_timer_service_subscribe(TimeUnits units, TickHandler handler);
