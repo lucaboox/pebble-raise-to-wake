@@ -7,7 +7,7 @@ void light_enable(bool val);
 
 static RtwDetector s_detector;
 static uint32_t s_duration_seconds;
-static unsigned s_sensitivity;
+static unsigned s_sensitivity, s_view_angle;
 static bool s_charging_enabled, s_plugged_enabled, s_ambient, s_logging;
 static bool s_power_light, s_forced_gesture_light;
 // A light-sensor (system interaction) light we started, and when.
@@ -81,6 +81,7 @@ static void update_lying_view(void) {
 static void reset_detector(void) {
   rtw_detector_init(&s_detector, RTW_SENSITIVITY_CONFIRM_SAMPLES(s_sensitivity),
                     RTW_SENSITIVITY_ROTATION_MG(s_sensitivity));
+  rtw_detector_set_view_angle(&s_detector, s_view_angle);
   update_lying_view();
 }
 
@@ -213,6 +214,8 @@ static void apply_settings(uint32_t duration, unsigned sensitivity, unsigned fla
   }
   s_ambient = flags & RTW_SETTING_AMBIENT;
   s_logging = flags & RTW_SETTING_LOGGING;
+  s_view_angle = (flags & RTW_SETTING_VIEW_ANGLE_MASK) >> RTW_SETTING_VIEW_ANGLE_SHIFT;
+  rtw_detector_set_view_angle(&s_detector, s_view_angle);
 #if defined(PBL_HEALTH)
   unsigned sleep_pause = (flags & RTW_SETTING_SLEEP_MASK) >> RTW_SETTING_SLEEP_SHIFT;
   if (sleep_pause > RTW_SLEEP_PAUSE_ANY) sleep_pause = RTW_SLEEP_PAUSE_OFF;
@@ -312,7 +315,9 @@ static void worker_init(void) {
                    (persist_read_bool(RTW_AMBIENT_PERSIST_KEY) ? RTW_SETTING_AMBIENT : 0) |
                    (persist_read_bool(RTW_LOGGING_PERSIST_KEY) ? RTW_SETTING_LOGGING : 0) |
                    (((unsigned)persist_read_int(RTW_SLEEP_PAUSE_PERSIST_KEY) << RTW_SETTING_SLEEP_SHIFT) &
-                    RTW_SETTING_SLEEP_MASK);
+                    RTW_SETTING_SLEEP_MASK) |
+                   (((unsigned)persist_read_int(RTW_VIEW_ANGLE_PERSIST_KEY) << RTW_SETTING_VIEW_ANGLE_SHIFT) &
+                    RTW_SETTING_VIEW_ANGLE_MASK);
   s_power_light = s_forced_gesture_light = s_interaction_light = s_view_release_pending = false;
   s_sleep_paused = false;
   s_sleep_pause = RTW_SLEEP_PAUSE_OFF;

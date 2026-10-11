@@ -23,8 +23,8 @@ static int64_t distance_to_box_squared(RtwVector v, int32_t x0, int32_t x1, int3
   RtwVector closest = {bound(v.x, x0, x1), bound(v.y, y0, y1), bound(v.z, z0, z1)};
   return distance_squared(v, closest);
 }
-#define UPRIGHT_VIEW RTW_VIEW_X_MIN_MG, RTW_VIEW_X_MAX_MG, RTW_VIEW_Y_MIN_MG,                      RTW_VIEW_Y_MAX_MG, RTW_VIEW_Z_MIN_MG, RTW_VIEW_Z_MAX_MG
-#define UPRIGHT_RETAIN RTW_RETAIN_X_MIN_MG, RTW_RETAIN_X_MAX_MG, RTW_RETAIN_Y_MIN_MG,                        RTW_RETAIN_Y_MAX_MG, RTW_RETAIN_Z_MIN_MG, RTW_RETAIN_Z_MAX_MG
+#define UPRIGHT_VIEW RTW_VIEW_X_MIN_MG, RTW_VIEW_X_MAX_MG, RTW_VIEW_Y_MIN_MG,                      d->view_y_max_mg, RTW_VIEW_Z_MIN_MG, RTW_VIEW_Z_MAX_MG
+#define UPRIGHT_RETAIN RTW_RETAIN_X_MIN_MG, RTW_RETAIN_X_MAX_MG, RTW_RETAIN_Y_MIN_MG,                        d->view_y_max_mg + RTW_RETAIN_Y_MARGIN_MG, RTW_RETAIN_Z_MIN_MG, RTW_RETAIN_Z_MAX_MG
 #define LYING_VIEW RTW_LYING_VIEW_X_MIN_MG, RTW_LYING_VIEW_X_MAX_MG, RTW_LYING_VIEW_Y_MIN_MG,                    RTW_LYING_VIEW_Y_MAX_MG, RTW_LYING_VIEW_Z_MIN_MG, RTW_LYING_VIEW_Z_MAX_MG
 #define LYING_RETAIN RTW_LYING_RETAIN_X_MIN_MG, RTW_LYING_RETAIN_X_MAX_MG,                      RTW_LYING_RETAIN_Y_MIN_MG, RTW_LYING_RETAIN_Y_MAX_MG,                      RTW_LYING_RETAIN_Z_MIN_MG, RTW_LYING_RETAIN_Z_MAX_MG
 
@@ -70,6 +70,7 @@ void rtw_detector_init(RtwDetector *d, unsigned confirmation_samples,
   }
   d->required_view_samples = (uint8_t)confirmation_samples;
   d->rotation_total_mg = (int32_t)rotation_total_mg;
+  d->view_y_max_mg = RTW_VIEW_Y_MAX_MG;
 }
 
 void rtw_detector_resume(RtwDetector *d) {
@@ -84,6 +85,10 @@ void rtw_detector_resume(RtwDetector *d) {
 void rtw_detector_release_view(RtwDetector *d) { d->view_released = true; }
 
 void rtw_detector_set_lying_view(RtwDetector *d, bool enabled) { d->lying_view = enabled; }
+
+void rtw_detector_set_view_angle(RtwDetector *d, unsigned level) {
+  d->view_y_max_mg = RTW_VIEW_ANGLE_Y_MAX_MG(level);
+}
 
 RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
                             uint64_t now, bool did_vibrate) {

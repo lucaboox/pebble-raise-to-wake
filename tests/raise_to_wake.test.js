@@ -179,6 +179,36 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     }
     tremble(to, 800);
   }
+  // Viewing angle: some wrists stop with the face level instead of tilted toward you.
+  const levelLook = [-60, -260, -964], nearlyLevel = [-60, -120, -993];
+  test('viewing angle Standard: a raise that stops with the face level stays dark', () => {
+    lower(); move([1000, 0, 0], levelLook, 480); tremble(levelLook, 800);
+    assert.strictEqual(raises, 0);
+  });
+  test('viewing angle Flat: the same level raise lights', () => {
+    api.core_set_view_angle(2);
+    lower(); move([1000, 0, 0], levelLook, 480); tremble(levelLook, 800);
+    assert.strictEqual(raises, 1);
+  });
+  test('viewing angle Level: a nearly level raise lights, Flat does not', () => {
+    api.core_set_view_angle(2);
+    lower(); move([1000, 0, 0], nearlyLevel, 480); tremble(nearlyLevel, 800);
+    assert.strictEqual(raises, 0);
+    reset(); api.core_set_view_angle(3);
+    lower(); move([1000, 0, 0], nearlyLevel, 480); tremble(nearlyLevel, 800);
+    assert.strictEqual(raises, 1);
+  });
+  test('viewing angle Flat: lowering and raising again lights twice', () => {
+    api.core_set_view_angle(2);
+    lower(); move([1000, 0, 0], levelLook, 480); tremble(levelLook, 800);
+    lower(); move([1000, 0, 0], levelLook, 480); tremble(levelLook, 800, 40, 11);
+    assert.strictEqual(raises, 2);
+  });
+  test('viewing angle Level: resting flat on a desk without a turn stays dark', () => {
+    api.core_set_view_angle(3);
+    hold(-24, -49, -1001, 800); tremble([-30, -150, -990], 3000, 15);
+    assert.strictEqual(raises, 0);
+  });
   // In bed on your back the screen faces down at you, which the upright
   // viewing region rejects as face-down. A separate lying view covers it.
   test('lying on your back: raising the watch above your face lights', () => {

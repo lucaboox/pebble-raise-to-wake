@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
-#define RTW_DETECTOR_REVISION 12
+#define RTW_DETECTOR_REVISION 13
 // Persistent keys shared by the app and worker. Keys 7 (old callback batch)
 // and 11 (old viewing samples) are retired; Sensitivity replaces both.
 #define RTW_DURATION_PERSIST_KEY 6
@@ -11,6 +11,7 @@
 #define RTW_LOGGING_PERSIST_KEY 12 // Debug logging; off unless enabled in the app.
 #define RTW_SENSITIVITY_PERSIST_KEY 13
 #define RTW_SLEEP_PAUSE_PERSIST_KEY 16 // Keys 14 and 15 are the app's schedule and first run.
+#define RTW_VIEW_ANGLE_PERSIST_KEY 17
 #define RTW_ACCEL_SAMPLING_RATE ACCEL_SAMPLING_25HZ
 #define RTW_SAMPLE_INTERVAL_MS 40 // Must match RTW_ACCEL_SAMPLING_RATE.
 // Two samples per callback halves worker wake-ups for at most 40 ms delivery delay.
@@ -30,6 +31,9 @@
 #define RTW_SLEEP_PAUSE_OFF 0
 #define RTW_SLEEP_PAUSE_DEEP 1 // Only during restful (deep) sleep.
 #define RTW_SLEEP_PAUSE_ANY 2  // During any sleep.
+// Bits 6-7: Viewing angle, how far the screen must tilt toward you.
+#define RTW_SETTING_VIEW_ANGLE_SHIFT 6
+#define RTW_SETTING_VIEW_ANGLE_MASK (3 << RTW_SETTING_VIEW_ANGLE_SHIFT)
 
 // Sensitivity: how far the wrist must turn, and how long the view must hold.
 #define RTW_SENSITIVITY_HIGH 0   // ~19 degrees, 3 samples
@@ -53,6 +57,16 @@
 // so -550 (rev 4-6) split real looks. -530 (~32 degrees) was the best
 // trade in simulated raises vs. keyboard fidgets; below ~-525 fidgets wake.
 #define RTW_VIEW_Y_MAX_MG (-530)
+// Viewing angle lets wrists that stop short of tilting the screen toward you
+// (face near level) still wake. Standard is the tuned limit above; the
+// flatter levels let more keyboard tilts in, so they are opt-in.
+#define RTW_VIEW_ANGLE_STANDARD 0 // ~32 degrees toward you
+#define RTW_VIEW_ANGLE_LOWER 1    // ~22 degrees
+#define RTW_VIEW_ANGLE_FLAT 2     // ~13 degrees
+#define RTW_VIEW_ANGLE_LEVEL 3    // ~5 degrees, nearly level
+#define RTW_VIEW_ANGLE_Y_MAX_MG(level) \
+  ((level) == RTW_VIEW_ANGLE_LOWER ? -380 : (level) == RTW_VIEW_ANGLE_FLAT ? -230 : \
+   (level) == RTW_VIEW_ANGLE_LEVEL ? -80 : RTW_VIEW_Y_MAX_MG)
 #define RTW_VIEW_Z_MIN_MG (-1100)
 #define RTW_VIEW_Z_MAX_MG 450
 
@@ -60,7 +74,8 @@
 #define RTW_RETAIN_X_MIN_MG (-650)
 #define RTW_RETAIN_X_MAX_MG 650
 #define RTW_RETAIN_Y_MIN_MG (-1250)
-#define RTW_RETAIN_Y_MAX_MG (-350)
+#define RTW_RETAIN_Y_MAX_MG (-350) // Always this far past the viewing angle's Y limit.
+#define RTW_RETAIN_Y_MARGIN_MG (RTW_RETAIN_Y_MAX_MG - RTW_VIEW_Y_MAX_MG)
 #define RTW_RETAIN_Z_MIN_MG (-1200)
 #define RTW_RETAIN_Z_MAX_MG 550
 

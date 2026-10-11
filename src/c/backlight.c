@@ -31,6 +31,7 @@ static const uint8_t s_durations[] = {3, 5, 8, 10, 15, 30, 0}; // 0 = until lowe
 static const char *s_sensitivity_names[] = {"High", "Normal", "Low"};
 static const char *s_charger_names[] = {"Off", "While charging", "Plugged in"};
 static const char *s_sleep_pause_names[] = {"Off", "Deep sleep", "Any sleep"};
+static const char *s_view_angle_names[] = {"Standard", "Lower", "Flat", "Level"};
 // Sleep pause needs Pebble Health, which not every watch has.
 #if defined(PBL_HEALTH)
 #define HAS_SLEEP_PAUSE 1
@@ -46,6 +47,7 @@ static bool s_worker_on, s_ambient, s_logging, s_charging, s_plugged, s_schedule
 static int s_duration = RTW_DEFAULT_LIGHT_DURATION_SECONDS;
 static int s_sensitivity = RTW_DEFAULT_SENSITIVITY;
 static int s_sleep_pause = RTW_SLEEP_PAUSE_OFF;
+static int s_view_angle = RTW_VIEW_ANGLE_STANDARD;
 static int s_start_hour = 7, s_start_min = 0, s_stop_hour = 23, s_stop_min = 0;
 
 
@@ -65,6 +67,10 @@ static void load_settings(void) {
   s_sensitivity = read_int(RTW_SENSITIVITY_PERSIST_KEY, RTW_DEFAULT_SENSITIVITY);
   if (s_sensitivity < RTW_SENSITIVITY_HIGH || s_sensitivity > RTW_SENSITIVITY_LOW) {
     s_sensitivity = RTW_DEFAULT_SENSITIVITY;
+  }
+  s_view_angle = read_int(RTW_VIEW_ANGLE_PERSIST_KEY, RTW_VIEW_ANGLE_STANDARD);
+  if (s_view_angle < RTW_VIEW_ANGLE_STANDARD || s_view_angle > RTW_VIEW_ANGLE_LEVEL) {
+    s_view_angle = RTW_VIEW_ANGLE_STANDARD;
   }
   s_charging = persist_read_bool(RTW_CHARGING_PERSIST_KEY);
   s_plugged = persist_read_bool(RTW_PLUGGED_PERSIST_KEY);
@@ -89,7 +95,8 @@ static void send_settings(void) {
     .data1 = (uint16_t)s_sensitivity,
     .data2 = (s_charging ? RTW_SETTING_CHARGING : 0) | (s_plugged ? RTW_SETTING_PLUGGED : 0) |
              (s_ambient ? RTW_SETTING_AMBIENT : 0) | (s_logging ? RTW_SETTING_LOGGING : 0) |
-             ((s_sleep_pause << RTW_SETTING_SLEEP_SHIFT) & RTW_SETTING_SLEEP_MASK),
+             ((s_sleep_pause << RTW_SETTING_SLEEP_SHIFT) & RTW_SETTING_SLEEP_MASK) |
+             ((s_view_angle << RTW_SETTING_VIEW_ANGLE_SHIFT) & RTW_SETTING_VIEW_ANGLE_MASK),
   };
   app_worker_send_message(RTW_MSG_SETTINGS, &message);
 }
@@ -316,7 +323,7 @@ static bool in_box(Position p, int x0, int x1, int y0, int y1, int z0, int z1) {
 
 // Same regions as the detector: viewing, lowered (outside the wider exit region), or between.
 static const char *classify(Position p) {
-  if (in_box(p, RTW_VIEW_X_MIN_MG, RTW_VIEW_X_MAX_MG, RTW_VIEW_Y_MIN_MG, RTW_VIEW_Y_MAX_MG,
+  if (in_box(p, RTW_VIEW_X_MIN_MG, RTW_VIEW_X_MAX_MG, RTW_VIEW_Y_MIN_MG, RTW_VIEW_ANGLE_Y_MAX_MG(s_view_angle),
              RTW_VIEW_Z_MIN_MG, RTW_VIEW_Z_MAX_MG)) {
     return "viewing";
   }
@@ -324,7 +331,8 @@ static const char *classify(Position p) {
              RTW_LYING_VIEW_Y_MAX_MG, RTW_LYING_VIEW_Z_MIN_MG, RTW_LYING_VIEW_Z_MAX_MG)) {
     return "bed view";
   }
-  if (in_box(p, RTW_RETAIN_X_MIN_MG, RTW_RETAIN_X_MAX_MG, RTW_RETAIN_Y_MIN_MG, RTW_RETAIN_Y_MAX_MG,
+  if (in_box(p, RTW_RETAIN_X_MIN_MG, RTW_RETAIN_X_MAX_MG, RTW_RETAIN_Y_MIN_MG,
+             RTW_VIEW_ANGLE_Y_MAX_MG(s_view_angle) + RTW_RETAIN_Y_MARGIN_MG,
              RTW_RETAIN_Z_MIN_MG, RTW_RETAIN_Z_MAX_MG)) {
     return "between";
   }
@@ -506,7 +514,7 @@ static void open_positions(void) {
  ****************************************************************************/
 
 typedef enum {
-  ROW_ENABLED, ROW_SENSITIVITY,
+  ROW_ENABLED, ROW_SENSITIVITY, ROW_VIEW_ANGLE,
   ROW_DURATION, ROW_SENSOR, ROW_CHARGER,
   ROW_SCHEDULE, ROW_START, ROW_STOP, ROW_SLEEP_PAUSE,
   ROW_LOGGING, ROW_RECORD, ROW_POSITIONS,
@@ -532,7 +540,7 @@ static uint16_t get_num_sections(MenuLayer *menu, void *context) { return NUM_SE
 
 static uint16_t get_num_rows(MenuLayer *menu, uint16_t section, void *context) {
   switch (section) {
-    case SECTION_WAKE: return 2;
+    case SECTION_WAKE: return 3;
     case SECTION_LIGHT: return 3;
     case SECTION_SCHEDULE: return (s_schedule ? 3 : 1) + HAS_SLEEP_PAUSE; // Times only when in use.
     default: return 3; // Logging, record position, saved positions.
@@ -596,6 +604,9 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *c
       break;
     case ROW_SENSITIVITY:
       title = "Sensitivity"; subtitle = s_sensitivity_names[s_sensitivity];
+      break;
+    case ROW_VIEW_ANGLE:
+      title = "Viewing angle"; subtitle = s_view_angle_names[s_view_angle];
       break;
     case ROW_DURATION:
       title = "Light duration";
@@ -678,6 +689,11 @@ static void select_click(MenuLayer *menu, MenuIndex *index, void *context) {
     case ROW_SENSITIVITY:
       s_sensitivity = (s_sensitivity + 1) % 3;
       persist_write_int(RTW_SENSITIVITY_PERSIST_KEY, s_sensitivity);
+      send_settings();
+      break;
+    case ROW_VIEW_ANGLE:
+      s_view_angle = (s_view_angle + 1) % ARRAY_LENGTH(s_view_angle_names);
+      persist_write_int(RTW_VIEW_ANGLE_PERSIST_KEY, s_view_angle);
       send_settings();
       break;
     case ROW_DURATION: {

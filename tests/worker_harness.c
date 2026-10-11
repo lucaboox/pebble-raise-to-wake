@@ -95,6 +95,7 @@ void core_init(int confirmations, int rotation_mg) {
 }
 void core_resume(void) { rtw_detector_resume(&s_core); }
 void core_set_lying(int on) { rtw_detector_set_lying_view(&s_core, on != 0); }
+void core_set_view_angle(int level) { rtw_detector_set_view_angle(&s_core, (unsigned)level); }
 int core_feed(int x, int y, int z, uint32_t timestamp, int vibrated) {
   return rtw_detector_update(&s_core, x, y, z, timestamp, vibrated != 0);
 }
