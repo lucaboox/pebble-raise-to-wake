@@ -197,6 +197,14 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     hold(0, 0, -1000, 800); liftTo([0, 0, -1000], [60, 200, 970]);
     assert.strictEqual(raises, 0);
   });
+  // Recorded lying on a couch, half reclined: 12 o'clock well up, screen partly down.
+  for (const pose of [[-77, -804, 664], [-37, -869, 676]]) {
+    test('couch, half reclined: raising to ' + pose + ' lights at night', () => {
+      api.core_set_lying(1);
+      hold(0, 0, -1000, 800); liftTo([0, 0, -1000], pose);
+      assert.strictEqual(raises, 1);
+    });
+  }
   test('lying view needs a bigger turn: a small turn into it stays dark', () => {
     api.core_set_lying(1);
     hold(0, -700, 714, 800); liftTo([0, -700, 714], [0, -400, 917], 400);
@@ -471,6 +479,16 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     move([0, -700, -714], [-110, -485, -868], 300); hold(-110, -485, -868, 200);
     move([-110, -485, -868], [-138, -1000, -250], 500);
     assert.strictEqual(api.mock_interaction_calls(), 2);
+  });
+  test('a small dip while using buttons hands the light over instead of cutting it', () => {
+    startWorker({6: 0}); lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
+    move([0, -700, -714], [-110, -430, -893], 200); hold(-110, -430, -893, 1000);
+    assert.strictEqual(api.mock_interaction_calls(), 1, 'light handed to the system');
+    lower(); assert.strictEqual(api.mock_on_calls(), 1);
+  });
+  test('a full lowering still switches the light straight off', () => {
+    startWorker({6: 0}); lower(); raise(); lower();
+    assert.strictEqual(api.mock_off_calls(), 1); assert.strictEqual(api.mock_interaction_calls(), 0);
   });
   test('lowering cancels old timer so it cannot end a subsequent raise', () => {
     startWorker(); lower(); raise(); lower(); assert.strictEqual(api.mock_timer_cancelled(), 1);

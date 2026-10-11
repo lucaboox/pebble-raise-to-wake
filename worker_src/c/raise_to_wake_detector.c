@@ -214,6 +214,10 @@ RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
         d->rest_samples >= RTW_REST_REFRESH_SAMPLES) {
       if (d->state == RTW_VIEWING) {
         // Lowering is reported promptly even if a short cooldown is still running.
+        // A small dip (settled just outside the viewing region, or leaving it
+        // after the light) is not a full lowering; the worker then must not
+        // cut a light someone may still be using.
+        d->lowered_fully = is_lowered;
         d->state = RTW_WAIT_LOWERED;
         d->have_view_entry = false;
         return RTW_EVENT_LOWERED;

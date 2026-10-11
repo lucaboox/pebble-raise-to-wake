@@ -167,9 +167,15 @@ static void handle_accel(AccelData *data, uint32_t num_samples) {
       RTW_LOG(APP_LOG_LEVEL_INFO, "RTW raise detected: %u samples, %lu ms from view entry",
               s_detector.required_view_samples, (unsigned long)s_detector.view_to_raise_ms);
     } else if (event == RTW_EVENT_LOWERED) {
-      RTW_LOG(APP_LOG_LEVEL_INFO, "RTW wrist lowered; waiting for rearm/cooldown");
-      release_gesture_light();
-      release_interaction_light(timestamp);
+      RTW_LOG(APP_LOG_LEVEL_INFO, "RTW wrist lowered (%s); waiting for rearm/cooldown",
+              s_detector.lowered_fully ? "fully" : "partly");
+      if (s_detector.lowered_fully) {
+        release_gesture_light();
+        release_interaction_light(timestamp);
+      } else {
+        // Only dipped: buttons may be in use, so hand over instead of switching off.
+        hand_off_gesture_light();
+      }
     }
   }
 }

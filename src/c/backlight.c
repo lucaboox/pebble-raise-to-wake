@@ -296,15 +296,18 @@ static void open_picker(int which) {
 
 typedef struct { int16_t x, y, z; } Position;
 
-#define COUNTDOWN_SECONDS 3
-#define RECORD_SAMPLES 25 // One second at 25 Hz, averaged.
+#define COUNTDOWN_SECONDS 1
+// Three seconds at 25 Hz in 0.2 s steps: raise during it and finish where it should wake.
+#define STEP_SAMPLES 5
+#define RECORD_STEPS 15
+#define FINAL_STEPS 2 // The saved pose averages the last 0.4 s.
 
 static Window *s_record_window;
 static TextLayer *s_record_text;
 static AppTimer *s_record_timer;
 static int s_countdown;
 static int32_t s_sum_x, s_sum_y, s_sum_z;
-static int s_sample_count;
+static int s_step;
 static char s_record_buffer[96];
 
 static bool in_box(Position p, int x0, int x1, int y0, int y1, int z0, int z1) {
@@ -348,15 +351,36 @@ static void save_position(Position p) {
 }
 
 static void record_accel(AccelData *data, uint32_t num_samples) {
-  for (uint32_t i = 0; i < num_samples && s_sample_count < RECORD_SAMPLES; ++i) {
-    s_sum_x += data[i].x;
-    s_sum_y += data[i].y;
-    s_sum_z += data[i].z;
-    s_sample_count++;
+  // One batch is one 0.2 s step: log its average, so the whole raise can be copied.
+  int32_t x = 0, y = 0, z = 0;
+  for (uint32_t i = 0; i < num_samples; ++i) {
+    x += data[i].x;
+    y += data[i].y;
+    z += data[i].z;
   }
-  if (s_sample_count < RECORD_SAMPLES) return;
+  if (num_samples) {
+    x /= (int32_t)num_samples;
+    y /= (int32_t)num_samples;
+    z /= (int32_t)num_samples;
+  }
+  s_step++;
+  Position step = {x, y, z};
+  (void)step; // Only used by the log line.
+  APP_LOG(APP_LOG_LEVEL_INFO, "RTW motion %d.%ds: %d,%d,%d %s", (s_step * 2) / 10, (s_step * 2) % 10,
+          step.x, step.y, step.z, classify(step));
+  if (s_step > RECORD_STEPS - FINAL_STEPS) {
+    s_sum_x += x;
+    s_sum_y += y;
+    s_sum_z += z;
+  }
+  if (s_step < RECORD_STEPS) {
+    snprintf(s_record_buffer, sizeof(s_record_buffer), "Raise now\n\n%d",
+             (RECORD_STEPS - s_step) / 5 + 1);
+    text_layer_set_text(s_record_text, s_record_buffer);
+    return;
+  }
   accel_data_service_unsubscribe();
-  Position p = {s_sum_x / s_sample_count, s_sum_y / s_sample_count, s_sum_z / s_sample_count};
+  Position p = {s_sum_x / FINAL_STEPS, s_sum_y / FINAL_STEPS, s_sum_z / FINAL_STEPS};
   save_position(p);
   vibes_double_pulse();
   APP_LOG(APP_LOG_LEVEL_INFO, "RTW position %d,%d,%d %s", p.x, p.y, p.z, classify(p));
@@ -368,17 +392,17 @@ static void record_accel(AccelData *data, uint32_t num_samples) {
 static void countdown_tick(void *context) {
   s_record_timer = NULL;
   if (s_countdown > 0) {
-    snprintf(s_record_buffer, sizeof(s_record_buffer), "Hold your wrist where you want it\n\n%d",
-             s_countdown--);
+    snprintf(s_record_buffer, sizeof(s_record_buffer), "Get ready\n\n%d", s_countdown--);
     text_layer_set_text(s_record_text, s_record_buffer);
     s_record_timer = app_timer_register(1000, countdown_tick, NULL);
     return;
   }
   vibes_short_pulse();
-  text_layer_set_text(s_record_text, "Recording...\nkeep still");
+  text_layer_set_text(s_record_text, "Raise now\n\n3");
   s_sum_x = s_sum_y = s_sum_z = 0;
-  s_sample_count = 0;
-  accel_data_service_subscribe(5, record_accel);
+  s_step = 0;
+  APP_LOG(APP_LOG_LEVEL_INFO, "RTW motion recording: 3 s in 0.2 s steps");
+  accel_data_service_subscribe(STEP_SAMPLES, record_accel);
   accel_service_set_sampling_rate(ACCEL_SAMPLING_25HZ);
 }
 
@@ -619,7 +643,7 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *c
       title = "Logging"; subtitle = s_logging ? "Uses battery" : "For tuning"; toggle = s_logging;
       break;
     case ROW_RECORD:
-      title = "Record position"; subtitle = "Where it should wake";
+      title = "Record motion"; subtitle = "Raise, end where it should wake";
       break;
     case ROW_POSITIONS:
       title = "Saved positions";

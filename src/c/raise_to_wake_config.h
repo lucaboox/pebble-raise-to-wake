@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
-#define RTW_DETECTOR_REVISION 11
+#define RTW_DETECTOR_REVISION 12
 // Persistent keys shared by the app and worker. Keys 7 (old callback batch)
 // and 11 (old viewing samples) are retired; Sensitivity replaces both.
 #define RTW_DURATION_PERSIST_KEY 6
@@ -69,13 +69,13 @@
 // flipped up also faces the screen down.
 #define RTW_LYING_VIEW_X_MIN_MG (-550)
 #define RTW_LYING_VIEW_X_MAX_MG 550
-#define RTW_LYING_VIEW_Y_MIN_MG (-450)
+#define RTW_LYING_VIEW_Y_MIN_MG (-1000) // Down to half-reclined: couch logs y -800..-870, z ~670.
 #define RTW_LYING_VIEW_Y_MAX_MG 600
 #define RTW_LYING_VIEW_Z_MIN_MG 600 // Screen tilted at least ~37 degrees toward the floor.
 #define RTW_LYING_VIEW_Z_MAX_MG 1100
 #define RTW_LYING_RETAIN_X_MIN_MG (-650)
 #define RTW_LYING_RETAIN_X_MAX_MG 650
-#define RTW_LYING_RETAIN_Y_MIN_MG (-600)
+#define RTW_LYING_RETAIN_Y_MIN_MG (-1150)
 #define RTW_LYING_RETAIN_Y_MAX_MG 750
 #define RTW_LYING_RETAIN_Z_MIN_MG 450
 #define RTW_LYING_RETAIN_Z_MAX_MG 1200

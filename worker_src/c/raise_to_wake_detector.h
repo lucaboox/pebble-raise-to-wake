@@ -29,6 +29,7 @@ typedef struct {
   bool transient_motion;
   bool view_released;
   bool lying_view;
+  bool lowered_fully; // Last RTW_EVENT_LOWERED left the wide exit region.
 } RtwDetector;
 
 // Portable core: only samples and millisecond timestamps, no Pebble APIs.
