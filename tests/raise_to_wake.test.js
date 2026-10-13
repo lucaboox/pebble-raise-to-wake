@@ -20,16 +20,16 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
   const {instance} = await WebAssembly.instantiate(fs.readFileSync(output));
   const api = instance.exports;
   const WAIT = 0, ARMED = 1, VIEWING = 4, RAISE = 1, LOWER = 2;
-  let now, raises, lowers, worker, tests = 0, raisedAt;
+  let now, raises, lowers, worker, tests = 0, raisedAt, stampNoise;
   function reset(confirmations = 3, rotation = 0) {
-    now = 0; raises = 0; lowers = 0; raisedAt = 0; worker = false;
+    now = 0; raises = 0; lowers = 0; raisedAt = 0; worker = false; stampNoise = null;
     api.core_init(confirmations, rotation);
     api.mock_reset();
   }
   function feed(x, y, z, vibrated = false, interval = 40) {
     now += interval;
     x = Math.round(x); y = Math.round(y); z = Math.round(z);
-    if (worker) api.mock_feed(x, y, z, now, +vibrated);
+    if (worker) api.mock_feed(x, y, z, stampNoise ? Math.max(0, now + stampNoise()) : now, +vibrated);
     else {
       const event = api.core_feed(x, y, z, now, +vibrated);
       if (event === RAISE) { ++raises; raisedAt = now; }
@@ -458,6 +458,20 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     startWorker(); lower(); raise(); hold(0, -700, -714, 8000); lower();
     assert.strictEqual(api.mock_on_calls(), 1); assert.strictEqual(api.mock_logs(), 1);
   });
+  // PebbleOS stamps samples from the last time its shared buffer was empty; a
+  // watchface also reading the accelerometer makes those stamps jump around.
+  test('timestamps jumping back and forth (second accel subscriber) still detect raises', () => {
+    let seed = 3, batch = 0, offset = 0;
+    stampNoise = () => {
+      if (++batch % 2 === 1) {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        offset = (seed % 2001) - 1000;   // up to a second either way per batch
+      }
+      return offset;
+    };
+    startWorker(); lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
+    lower(); raise(); assert.strictEqual(api.mock_on_calls(), 2);
+  });
   test('batched samples sharing one timestamp still detect a raise', () => {
     api.mock_shared_stamp(1); startWorker(); lower(); raise();
     assert.strictEqual(api.mock_on_calls(), 1); assert.strictEqual(api.mock_state(), VIEWING);
@@ -543,6 +557,39 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
   test('zero duration retains light until confirmed lowering', () => {
     startWorker({6: 0}); lower(); raise(); assert.strictEqual(api.mock_timer_count(), 0);
     lower(); assert.strictEqual(api.mock_off_calls(), 1);
+  });
+  // Light off delay (key 18): 1 = 3 s, 2 = 5 s, 3 = 8 s after lowering.
+  const expireLast = () => api.mock_expire(api.mock_timer_count() - 1);
+  test('light off delay: lowering keeps the light until the delay ends', () => {
+    startWorker({6: 0, 18: 1}); lower(); raise(); lower();
+    assert.strictEqual(api.mock_off_calls(), 0);
+    assert.strictEqual(api.mock_timer_duration(api.mock_timer_count() - 1), 3000);
+    expireLast(); assert.strictEqual(api.mock_off_calls(), 1);
+  });
+  test('light off delay: raising again during the delay keeps the light on', () => {
+    startWorker({6: 0, 18: 2}); lower(); raise(); lower();
+    const delay = api.mock_timer_count() - 1;
+    raise(); assert.strictEqual(api.mock_on_calls(), 2);
+    api.mock_expire(delay); assert.strictEqual(api.mock_off_calls(), 0);
+    lower(); expireLast(); assert.strictEqual(api.mock_off_calls(), 1);
+  });
+  test('light off delay: back in view when the delay ends keeps the light', () => {
+    startWorker({6: 0, 18: 3}); lower(); raise(); lower();
+    assert.strictEqual(api.mock_timer_duration(api.mock_timer_count() - 1), 8000);
+    hold(0, -700, -714, 1200); expireLast();
+    assert.strictEqual(api.mock_off_calls(), 0);
+    lower(); expireLast(); assert.strictEqual(api.mock_off_calls(), 1);
+  });
+  test('light off delay: the duration timer still hands off during the delay', () => {
+    startWorker({6: 5, 18: 1}); lower(); raise(); lower();
+    api.mock_expire(0);   // 5 s light timer
+    assert.strictEqual(api.mock_interaction_calls(), 1);
+    expireLast(); assert.strictEqual(api.mock_off_calls(), 1);
+  });
+  test('light off delay can be switched on live from the app', () => {
+    startWorker({6: 0}); api.mock_app_message(2, 0, 1, 2 << 8);
+    lower(); raise(); lower(); assert.strictEqual(api.mock_off_calls(), 0);
+    expireLast(); assert.strictEqual(api.mock_off_calls(), 1);
   });
   test('charging override cancels timer and resets tracking on disconnect', () => {
     startWorker({8: 1}); lower(); raise(); api.mock_battery(1, 1);

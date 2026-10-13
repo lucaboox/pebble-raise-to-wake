@@ -32,6 +32,7 @@ static const char *s_sensitivity_names[] = {"High", "Normal", "Low"};
 static const char *s_charger_names[] = {"Off", "While charging", "Plugged in"};
 static const char *s_sleep_pause_names[] = {"Off", "Deep sleep", "Any sleep"};
 static const char *s_view_angle_names[] = {"Standard", "Lower", "Flat", "Level"};
+static const char *s_off_delay_names[] = {"Off right away", "After 3 seconds", "After 5 seconds", "After 8 seconds"};
 // Sleep pause needs Pebble Health, which not every watch has.
 #if defined(PBL_HEALTH)
 #define HAS_SLEEP_PAUSE 1
@@ -48,6 +49,7 @@ static int s_duration = RTW_DEFAULT_LIGHT_DURATION_SECONDS;
 static int s_sensitivity = RTW_DEFAULT_SENSITIVITY;
 static int s_sleep_pause = RTW_SLEEP_PAUSE_OFF;
 static int s_view_angle = RTW_VIEW_ANGLE_STANDARD;
+static int s_off_delay;
 static int s_start_hour = 7, s_start_min = 0, s_stop_hour = 23, s_stop_min = 0;
 
 
@@ -72,6 +74,8 @@ static void load_settings(void) {
   if (s_view_angle < RTW_VIEW_ANGLE_STANDARD || s_view_angle > RTW_VIEW_ANGLE_LEVEL) {
     s_view_angle = RTW_VIEW_ANGLE_STANDARD;
   }
+  s_off_delay = read_int(RTW_OFF_DELAY_PERSIST_KEY, 0);
+  if (s_off_delay < 0 || s_off_delay >= RTW_OFF_DELAY_LEVELS) s_off_delay = 0;
   s_charging = persist_read_bool(RTW_CHARGING_PERSIST_KEY);
   s_plugged = persist_read_bool(RTW_PLUGGED_PERSIST_KEY);
   s_ambient = persist_read_bool(RTW_AMBIENT_PERSIST_KEY);
@@ -96,7 +100,8 @@ static void send_settings(void) {
     .data2 = (s_charging ? RTW_SETTING_CHARGING : 0) | (s_plugged ? RTW_SETTING_PLUGGED : 0) |
              (s_ambient ? RTW_SETTING_AMBIENT : 0) | (s_logging ? RTW_SETTING_LOGGING : 0) |
              ((s_sleep_pause << RTW_SETTING_SLEEP_SHIFT) & RTW_SETTING_SLEEP_MASK) |
-             ((s_view_angle << RTW_SETTING_VIEW_ANGLE_SHIFT) & RTW_SETTING_VIEW_ANGLE_MASK),
+             ((s_view_angle << RTW_SETTING_VIEW_ANGLE_SHIFT) & RTW_SETTING_VIEW_ANGLE_MASK) |
+             ((s_off_delay << RTW_SETTING_OFF_DELAY_SHIFT) & RTW_SETTING_OFF_DELAY_MASK),
   };
   app_worker_send_message(RTW_MSG_SETTINGS, &message);
 }
@@ -515,7 +520,7 @@ static void open_positions(void) {
 
 typedef enum {
   ROW_ENABLED, ROW_SENSITIVITY, ROW_VIEW_ANGLE,
-  ROW_DURATION, ROW_SENSOR, ROW_CHARGER,
+  ROW_DURATION, ROW_OFF_DELAY, ROW_SENSOR, ROW_CHARGER,
   ROW_SCHEDULE, ROW_START, ROW_STOP, ROW_SLEEP_PAUSE,
   ROW_LOGGING, ROW_RECORD, ROW_POSITIONS,
 } Row;
@@ -541,7 +546,7 @@ static uint16_t get_num_sections(MenuLayer *menu, void *context) { return NUM_SE
 static uint16_t get_num_rows(MenuLayer *menu, uint16_t section, void *context) {
   switch (section) {
     case SECTION_WAKE: return 3;
-    case SECTION_LIGHT: return 3;
+    case SECTION_LIGHT: return 4;
     case SECTION_SCHEDULE: return (s_schedule ? 3 : 1) + HAS_SLEEP_PAUSE; // Times only when in use.
     default: return 3; // Logging, record position, saved positions.
   }
@@ -618,6 +623,9 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *c
       } else {
         subtitle = "Until lowered";
       }
+      break;
+    case ROW_OFF_DELAY:
+      title = "When lowered"; subtitle = s_off_delay_names[s_off_delay];
       break;
     case ROW_SENSOR:
       title = "Light sensor"; subtitle = "Only when dark"; toggle = s_ambient;
@@ -709,6 +717,11 @@ static void select_click(MenuLayer *menu, MenuIndex *index, void *context) {
       send_settings();
       break;
     }
+    case ROW_OFF_DELAY:
+      s_off_delay = (s_off_delay + 1) % RTW_OFF_DELAY_LEVELS;
+      persist_write_int(RTW_OFF_DELAY_PERSIST_KEY, s_off_delay);
+      send_settings();
+      break;
     case ROW_SENSOR:
       s_ambient = !s_ambient;
       persist_write_bool(RTW_AMBIENT_PERSIST_KEY, s_ambient);

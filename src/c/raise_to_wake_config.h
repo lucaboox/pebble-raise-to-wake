@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
-#define RTW_DETECTOR_REVISION 13
+#define RTW_DETECTOR_REVISION 14
 // Persistent keys shared by the app and worker. Keys 7 (old callback batch)
 // and 11 (old viewing samples) are retired; Sensitivity replaces both.
 #define RTW_DURATION_PERSIST_KEY 6
@@ -12,6 +12,7 @@
 #define RTW_SENSITIVITY_PERSIST_KEY 13
 #define RTW_SLEEP_PAUSE_PERSIST_KEY 16 // Keys 14 and 15 are the app's schedule and first run.
 #define RTW_VIEW_ANGLE_PERSIST_KEY 17
+#define RTW_OFF_DELAY_PERSIST_KEY 18
 #define RTW_ACCEL_SAMPLING_RATE ACCEL_SAMPLING_25HZ
 #define RTW_SAMPLE_INTERVAL_MS 40 // Must match RTW_ACCEL_SAMPLING_RATE.
 // Two samples per callback halves worker wake-ups for at most 40 ms delivery delay.
@@ -34,6 +35,13 @@
 // Bits 6-7: Viewing angle, how far the screen must tilt toward you.
 #define RTW_SETTING_VIEW_ANGLE_SHIFT 6
 #define RTW_SETTING_VIEW_ANGLE_MASK (3 << RTW_SETTING_VIEW_ANGLE_SHIFT)
+// Bits 8-9: Light off delay. Lowering waits this long before the light goes
+// off, and the light stays while the wrist is back in view when it ends.
+#define RTW_SETTING_OFF_DELAY_SHIFT 8
+#define RTW_SETTING_OFF_DELAY_MASK (3 << RTW_SETTING_OFF_DELAY_SHIFT)
+#define RTW_OFF_DELAY_LEVELS 4 // Off, 3 s, 5 s, 8 s
+#define RTW_OFF_DELAY_MS(level) \
+  ((level) == 1 ? 3000 : (level) == 2 ? 5000 : (level) == 3 ? 8000 : 0)
 
 // Sensitivity: how far the wrist must turn, and how long the view must hold.
 #define RTW_SENSITIVITY_HIGH 0   // ~19 degrees, 3 samples

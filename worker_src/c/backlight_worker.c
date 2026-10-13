@@ -8,6 +8,12 @@ void light_enable(bool val);
 static RtwDetector s_detector;
 static uint32_t s_duration_seconds;
 static unsigned s_sensitivity, s_view_angle;
+// Light off delay: a lowering only switches the light off after this.
+static uint32_t s_off_delay_ms;
+static AppTimer *s_off_delay_timer;
+static uint64_t s_lowered_ms;
+// Sample clock: 40 ms per sample, so it only moves forward.
+static uint64_t s_clock_ms;
 static bool s_charging_enabled, s_plugged_enabled, s_ambient, s_logging;
 static bool s_power_light, s_forced_gesture_light;
 // A light-sensor (system interaction) light we started, and when.
@@ -35,8 +41,16 @@ static void cancel_light_timer(void) {
   }
 }
 
+static void cancel_off_delay(void) {
+  if (s_off_delay_timer) {
+    app_timer_cancel(s_off_delay_timer);
+    s_off_delay_timer = NULL;
+  }
+}
+
 static void release_gesture_light(void) {
   cancel_light_timer();
+  cancel_off_delay();
   // Ambient interactions use the normal system timeout. Never cancel them.
   if (s_forced_gesture_light && !s_power_light) {
     light_enable(false); // Release our forced-on override to automatic control.
@@ -95,6 +109,18 @@ static void light_callback(void *context) {
   // A duration expiry does not unlock VIEWING. Lowering is still required.
 }
 
+static void off_delay_callback(void *context) {
+  (void)context;
+  s_off_delay_timer = NULL;
+  // Tilted back up to look again: keep the light and check again later.
+  if (rtw_detector_in_view(&s_detector)) {
+    s_off_delay_timer = app_timer_register(s_off_delay_ms, off_delay_callback, NULL);
+    if (s_off_delay_timer) return;
+  }
+  release_gesture_light();
+  release_interaction_light(s_lowered_ms);
+}
+
 static void start_interaction_light(uint64_t now) {
   light_enable_interaction();
   s_interaction_light = true;
@@ -104,6 +130,7 @@ static void start_interaction_light(uint64_t now) {
 
 static void activate_gesture_light(uint64_t now) {
   cancel_light_timer();
+  cancel_off_delay();
   s_view_release_pending = false;
   if (s_ambient) {
     start_interaction_light(now);
@@ -124,15 +151,15 @@ static void activate_gesture_light(uint64_t now) {
 static void handle_accel(AccelData *data, uint32_t num_samples) {
   s_samples_since_tick += num_samples;
   if (s_power_light) return;
-  uint64_t previous = 0;
   for (uint32_t i = 0; i < num_samples; ++i) {
     AccelData *sample = &data[i];
-    // Samples in one batch are 40 ms apart. Should firmware ever stamp a batch
-    // with one shared time, space them out rather than treating it as a clock
-    // rollback. Rollbacks between batches still reach the detector unchanged.
-    uint64_t timestamp = sample->timestamp;
-    if (i && timestamp <= previous) timestamp = previous + RTW_SAMPLE_INTERVAL_MS;
-    previous = timestamp;
+    // Count time in samples instead of using AccelData.timestamp. PebbleOS
+    // stamps samples relative to the last moment its shared accel buffer was
+    // empty; with a second subscriber (a watchface reading the accelerometer)
+    // that moment goes stale and stamps jump back and forth, which the
+    // detector rejects as clock errors, dropping raises.
+    s_clock_ms += RTW_SAMPLE_INTERVAL_MS;
+    uint64_t timestamp = s_clock_ms;
     if (s_view_release_pending &&
         timestamp - s_interaction_light_ms >= RTW_INTERACTION_RELEASE_MS) {
       s_view_release_pending = false;
@@ -170,7 +197,15 @@ static void handle_accel(AccelData *data, uint32_t num_samples) {
     } else if (event == RTW_EVENT_LOWERED) {
       RTW_LOG(APP_LOG_LEVEL_INFO, "RTW wrist lowered (%s); waiting for rearm/cooldown",
               s_detector.lowered_fully ? "fully" : "partly");
-      if (s_detector.lowered_fully) {
+      bool lit = s_forced_gesture_light || s_interaction_light;
+      if (s_detector.lowered_fully && s_off_delay_ms && lit && !s_off_delay_timer) {
+        // A brief dip or tilt back should not black out the screen.
+        s_lowered_ms = timestamp;
+        s_off_delay_timer = app_timer_register(s_off_delay_ms, off_delay_callback, NULL);
+      }
+      if (s_off_delay_timer) {
+        // Waiting out the delay.
+      } else if (s_detector.lowered_fully) {
         release_gesture_light();
         release_interaction_light(timestamp);
       } else {
@@ -186,6 +221,7 @@ static void battery_handler(BatteryChargeState charge) {
                      (charge.is_plugged && s_plugged_enabled);
   if (power_light == s_power_light) return;
   cancel_light_timer();
+  cancel_off_delay();
   s_forced_gesture_light = false;
   s_power_light = power_light;
   light_enable(power_light);
@@ -216,6 +252,7 @@ static void apply_settings(uint32_t duration, unsigned sensitivity, unsigned fla
   s_logging = flags & RTW_SETTING_LOGGING;
   s_view_angle = (flags & RTW_SETTING_VIEW_ANGLE_MASK) >> RTW_SETTING_VIEW_ANGLE_SHIFT;
   rtw_detector_set_view_angle(&s_detector, s_view_angle);
+  s_off_delay_ms = RTW_OFF_DELAY_MS((flags & RTW_SETTING_OFF_DELAY_MASK) >> RTW_SETTING_OFF_DELAY_SHIFT);
 #if defined(PBL_HEALTH)
   unsigned sleep_pause = (flags & RTW_SETTING_SLEEP_MASK) >> RTW_SETTING_SLEEP_SHIFT;
   if (sleep_pause > RTW_SLEEP_PAUSE_ANY) sleep_pause = RTW_SLEEP_PAUSE_OFF;
@@ -317,7 +354,10 @@ static void worker_init(void) {
                    (((unsigned)persist_read_int(RTW_SLEEP_PAUSE_PERSIST_KEY) << RTW_SETTING_SLEEP_SHIFT) &
                     RTW_SETTING_SLEEP_MASK) |
                    (((unsigned)persist_read_int(RTW_VIEW_ANGLE_PERSIST_KEY) << RTW_SETTING_VIEW_ANGLE_SHIFT) &
-                    RTW_SETTING_VIEW_ANGLE_MASK);
+                    RTW_SETTING_VIEW_ANGLE_MASK) |
+                   (((unsigned)persist_read_int(RTW_OFF_DELAY_PERSIST_KEY) << RTW_SETTING_OFF_DELAY_SHIFT) &
+                    RTW_SETTING_OFF_DELAY_MASK);
+  s_off_delay_timer = NULL;
   s_power_light = s_forced_gesture_light = s_interaction_light = s_view_release_pending = false;
   s_sleep_paused = false;
   s_sleep_pause = RTW_SLEEP_PAUSE_OFF;

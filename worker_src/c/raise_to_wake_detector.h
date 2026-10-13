@@ -49,6 +49,8 @@ void rtw_detector_release_view(RtwDetector *d);
 void rtw_detector_set_lying_view(RtwDetector *d, bool enabled);
 // RTW_VIEW_ANGLE_*: how far the screen must tilt toward you. Standard by default.
 void rtw_detector_set_view_angle(RtwDetector *d, unsigned level);
+// Whether the filtered wrist position is in the viewing region right now.
+bool rtw_detector_in_view(const RtwDetector *d);
 RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
                             uint64_t timestamp_ms, bool did_vibrate);
 const char *rtw_state_name(RtwState state);

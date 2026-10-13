@@ -90,6 +90,10 @@ void rtw_detector_set_view_angle(RtwDetector *d, unsigned level) {
   d->view_y_max_mg = RTW_VIEW_ANGLE_Y_MAX_MG(level);
 }
 
+bool rtw_detector_in_view(const RtwDetector *d) {
+  return d->filter_ready && in_view(d, d->gravity);
+}
+
 RtwEvent rtw_detector_update(RtwDetector *d, int16_t x, int16_t y, int16_t z,
                             uint64_t now, bool did_vibrate) {
   RtwVector raw = {x, y, z};
