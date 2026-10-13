@@ -115,16 +115,6 @@ static void hand_off_light(void) {
   app_worker_send_message(RTW_MSG_HAND_OFF_LIGHT, &message);
 }
 
-// Let the worker stop sampling itself before it is killed: PebbleOS v4.41.0
-// reboots the watch when it removes a killed worker's accel subscription.
-static void stop_worker(void) {
-  if (!app_worker_is_running()) return;
-  AppWorkerMessage message = {0};
-  app_worker_send_message(RTW_MSG_STOP, &message);
-  psleep(RTW_STOP_WAIT_MS); // Yields to the worker so it handles the message.
-  app_worker_kill();
-}
-
 static void set_worker(bool on) {
   if (on) {
     AppWorkerResult result = app_worker_launch();
@@ -134,7 +124,7 @@ static void set_worker(bool on) {
                   result == APP_WORKER_RESULT_ALREADY_RUNNING ||
                   result == APP_WORKER_RESULT_ASKING_CONFIRMATION;
   } else {
-    stop_worker();
+    app_worker_kill();
     s_worker_on = false;
   }
 }
@@ -832,7 +822,7 @@ static void handle_wakeup(int32_t cookie) {
     app_worker_launch();
     schedule_daily(s_start_hour, s_start_min, TIME_START);
   } else {
-    stop_worker();
+    app_worker_kill();
     schedule_daily(s_stop_hour, s_stop_min, TIME_STOP);
   }
 }
