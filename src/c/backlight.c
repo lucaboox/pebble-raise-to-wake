@@ -8,6 +8,7 @@
 #define STOP_MINUTE   3
 #define SCHEDULE      14
 #define STARTED_ONCE  15 // Set after the first launch has started the worker.
+#define ENABLED       28 // The "Enabled" choice; missing means on.
 #define POSITION_COUNT 19 // Number of recorded positions, then the positions themselves.
 #define POSITION_FIRST 20
 #define MAX_POSITIONS  8
@@ -114,6 +115,16 @@ static void hand_off_light(void) {
   app_worker_send_message(RTW_MSG_HAND_OFF_LIGHT, &message);
 }
 
+// Let the worker stop sampling itself before it is killed: PebbleOS v4.41.0
+// reboots the watch when it removes a killed worker's accel subscription.
+static void stop_worker(void) {
+  if (!app_worker_is_running()) return;
+  AppWorkerMessage message = {0};
+  app_worker_send_message(RTW_MSG_STOP, &message);
+  psleep(RTW_STOP_WAIT_MS); // Yields to the worker so it handles the message.
+  app_worker_kill();
+}
+
 static void set_worker(bool on) {
   if (on) {
     AppWorkerResult result = app_worker_launch();
@@ -123,7 +134,7 @@ static void set_worker(bool on) {
                   result == APP_WORKER_RESULT_ALREADY_RUNNING ||
                   result == APP_WORKER_RESULT_ASKING_CONFIRMATION;
   } else {
-    app_worker_kill();
+    stop_worker();
     s_worker_on = false;
   }
 }
@@ -693,6 +704,7 @@ static void select_click(MenuLayer *menu, MenuIndex *index, void *context) {
   switch (row_at(index)) {
     case ROW_ENABLED:
       set_worker(!s_worker_on);
+      persist_write_bool(ENABLED, s_worker_on);
       break;
     case ROW_SENSITIVITY:
       s_sensitivity = (s_sensitivity + 1) % 3;
@@ -820,7 +832,7 @@ static void handle_wakeup(int32_t cookie) {
     app_worker_launch();
     schedule_daily(s_start_hour, s_start_min, TIME_START);
   } else {
-    app_worker_kill();
+    stop_worker();
     schedule_daily(s_stop_hour, s_stop_min, TIME_STOP);
   }
 }
@@ -838,11 +850,14 @@ int main(void) {
 
   // Opening the app used to kill and relaunch the worker, which cut any
   // raise-to-wake light and froze the screen for a second.
+  // Installing an update stops the worker, so start it again here unless it
+  // was turned off under "Enabled" or the schedule has it off right now.
   s_worker_on = app_worker_is_running();
+  bool enabled = persist_exists(ENABLED) ? persist_read_bool(ENABLED) : true;
   if (s_worker_on) {
     hand_off_light();
-  } else if (!persist_exists(STARTED_ONCE)) {
-    set_worker(true); // First run: start raise to wake. Afterwards, respect "Enabled".
+  } else if (enabled && (!s_schedule || inside_schedule())) {
+    set_worker(true);
   }
   persist_write_bool(STARTED_ONCE, true);
   update_schedule(false);

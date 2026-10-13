@@ -14,6 +14,8 @@ static AppTimer *s_off_delay_timer;
 static uint64_t s_lowered_ms;
 // Sample clock: 40 ms per sample, so it only moves forward.
 static uint64_t s_clock_ms;
+// Set by RTW_MSG_STOP: sampling is off for good until the app kills us.
+static bool s_stopped;
 static bool s_charging_enabled, s_plugged_enabled, s_ambient, s_logging;
 static bool s_power_light, s_forced_gesture_light;
 // A light-sensor (system interaction) light we started, and when.
@@ -283,6 +285,11 @@ static void app_message_handler(uint16_t type, AppWorkerMessage *message) {
     apply_settings(message->data0, message->data1, message->data2, false);
     RTW_LOG(APP_LOG_LEVEL_INFO, "RTW settings: duration=%u s sensitivity=%u flags=%u",
             message->data0, message->data1, message->data2);
+  } else if (type == RTW_MSG_STOP && !s_stopped) {
+    s_stopped = true;
+    if (!s_sleep_paused) accel_data_service_unsubscribe();
+    hand_off_gesture_light();
+    RTW_LOG(APP_LOG_LEVEL_INFO, "RTW stopping");
   }
 }
 
@@ -312,7 +319,7 @@ static void update_sleep_pause(void) {
         HealthActivityRestfulSleep : (HealthActivitySleep | HealthActivityRestfulSleep);
     paused = (activities & pausing) != 0;
   }
-  if (paused == s_sleep_paused) return;
+  if (paused == s_sleep_paused || s_stopped) return;
   s_sleep_paused = paused;
   if (paused) {
     accel_data_service_unsubscribe();
@@ -331,7 +338,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   (void)units_changed;
   update_lying_view();
   update_sleep_pause(); // In case Health did not announce the change.
-  if (!s_sleep_paused && !s_samples_since_tick) {
+  if (!s_stopped && !s_sleep_paused && !s_samples_since_tick) {
     APP_LOG(APP_LOG_LEVEL_WARNING, "RTW no motion data for a minute; reconnecting");
     accel_data_service_unsubscribe();
     subscribe_accel();
@@ -358,6 +365,7 @@ static void worker_init(void) {
                    (((unsigned)persist_read_int(RTW_OFF_DELAY_PERSIST_KEY) << RTW_SETTING_OFF_DELAY_SHIFT) &
                     RTW_SETTING_OFF_DELAY_MASK);
   s_off_delay_timer = NULL;
+  s_stopped = false;
   s_power_light = s_forced_gesture_light = s_interaction_light = s_view_release_pending = false;
   s_sleep_paused = false;
   s_sleep_pause = RTW_SLEEP_PAUSE_OFF;
@@ -377,7 +385,7 @@ static void worker_init(void) {
 }
 
 static void worker_deinit(void) {
-  accel_data_service_unsubscribe();
+  if (!s_stopped && !s_sleep_paused) accel_data_service_unsubscribe();
   tick_timer_service_unsubscribe();
   app_worker_message_unsubscribe();
 #if defined(PBL_HEALTH)

@@ -591,6 +591,35 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     lower(); raise(); lower(); assert.strictEqual(api.mock_off_calls(), 0);
     expireLast(); assert.strictEqual(api.mock_off_calls(), 1);
   });
+  // PebbleOS v4.41.0 reboots when it cleans up a killed worker's accel
+  // subscription, so the app sends RTW_MSG_STOP (3) and the worker unsubscribes first.
+  test('stop message: the worker stops sampling and hands off its light', () => {
+    startWorker(); lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
+    api.mock_app_message(3, 0, 0, 0);
+    assert.strictEqual(api.mock_accel_subscribed(), 0);
+    assert.strictEqual(api.mock_interaction_calls(), 1);
+    lower(); raise(); assert.strictEqual(api.mock_on_calls(), 1);
+  });
+  test('stop message: the minute watchdog does not subscribe again', () => {
+    startWorker(); api.mock_app_message(3, 0, 0, 0);
+    const subscribes = api.mock_subscribes();
+    api.mock_tick(); api.mock_tick();
+    assert.strictEqual(api.mock_subscribes(), subscribes);
+    assert.strictEqual(api.mock_accel_subscribed(), 0);
+  });
+  test('stop message: the worker does not unsubscribe a second time when killed', () => {
+    startWorker(); api.mock_app_message(3, 0, 0, 0);
+    const unsubscribes = api.mock_unsubscribes();
+    api.mock_stop();
+    assert.strictEqual(api.mock_unsubscribes(), unsubscribes);
+  });
+  test('stop message: waking up under sleep pause does not subscribe again', () => {
+    startWorker({16: 2}); api.mock_set_activities(1, 0); api.mock_tick();
+    assert.strictEqual(api.mock_accel_subscribed(), 0);
+    api.mock_app_message(3, 0, 0, 0);
+    api.mock_set_activities(0, 0); api.mock_tick();
+    assert.strictEqual(api.mock_accel_subscribed(), 0);
+  });
   test('charging override cancels timer and resets tracking on disconnect', () => {
     startWorker({8: 1}); lower(); raise(); api.mock_battery(1, 1);
     const offCalls = api.mock_off_calls(); api.mock_expire(0);

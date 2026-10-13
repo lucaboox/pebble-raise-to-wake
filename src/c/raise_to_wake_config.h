@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
-#define RTW_DETECTOR_REVISION 14
+#define RTW_DETECTOR_REVISION 15
 // Persistent keys shared by the app and worker. Keys 7 (old callback batch)
 // and 11 (old viewing samples) are retired; Sensitivity replaces both.
 #define RTW_DURATION_PERSIST_KEY 6
@@ -22,6 +22,11 @@
 // data1 = sensitivity, data2 = RTW_SETTING_* flags, so no restart is needed.
 #define RTW_MSG_HAND_OFF_LIGHT 1 // The user is in the app: give the light to the system.
 #define RTW_MSG_SETTINGS 2
+// Sent just before the app kills the worker: stop sampling first. On PebbleOS
+// v4.41.0 the watch reboots (shared_cbuf assert) when it cleans up the accel
+// subscription of a killed worker, so leave it nothing to clean up.
+#define RTW_MSG_STOP 3
+#define RTW_STOP_WAIT_MS 300 // Time the worker gets to stop before the kill.
 #define RTW_SETTING_CHARGING 1
 #define RTW_SETTING_PLUGGED 2
 #define RTW_SETTING_AMBIENT 4
