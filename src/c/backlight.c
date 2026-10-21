@@ -40,12 +40,18 @@ static const char *s_off_delay_names[] = {"Off right away", "After 3 seconds", "
 #else
 #define HAS_SLEEP_PAUSE 0
 #endif
+// Apps cannot read Quiet Time on aplite.
+#if defined(PBL_PLATFORM_APLITE)
+#define HAS_QUIET_TIME 0
+#else
+#define HAS_QUIET_TIME 1
+#endif
 
 static Window *s_window;
 static MenuLayer *s_menu;
 static AppTimer *s_refresh_timer;
 
-static bool s_worker_on, s_ambient, s_logging, s_charging, s_plugged, s_schedule;
+static bool s_worker_on, s_ambient, s_logging, s_charging, s_plugged, s_schedule, s_quiet_time;
 static int s_duration = RTW_DEFAULT_LIGHT_DURATION_SECONDS;
 static int s_sensitivity = RTW_DEFAULT_SENSITIVITY;
 static int s_sleep_pause = RTW_SLEEP_PAUSE_OFF;
@@ -82,6 +88,7 @@ static void load_settings(void) {
   s_ambient = persist_read_bool(RTW_AMBIENT_PERSIST_KEY);
   s_logging = persist_read_bool(RTW_LOGGING_PERSIST_KEY);
   s_schedule = persist_read_bool(SCHEDULE);
+  s_quiet_time = persist_read_bool(RTW_QUIET_TIME_PERSIST_KEY);
   s_sleep_pause = read_int(RTW_SLEEP_PAUSE_PERSIST_KEY, RTW_SLEEP_PAUSE_OFF);
   if (s_sleep_pause < RTW_SLEEP_PAUSE_OFF || s_sleep_pause > RTW_SLEEP_PAUSE_ANY) {
     s_sleep_pause = RTW_SLEEP_PAUSE_OFF;
@@ -102,7 +109,8 @@ static void send_settings(void) {
              (s_ambient ? RTW_SETTING_AMBIENT : 0) | (s_logging ? RTW_SETTING_LOGGING : 0) |
              ((s_sleep_pause << RTW_SETTING_SLEEP_SHIFT) & RTW_SETTING_SLEEP_MASK) |
              ((s_view_angle << RTW_SETTING_VIEW_ANGLE_SHIFT) & RTW_SETTING_VIEW_ANGLE_MASK) |
-             ((s_off_delay << RTW_SETTING_OFF_DELAY_SHIFT) & RTW_SETTING_OFF_DELAY_MASK),
+             ((s_off_delay << RTW_SETTING_OFF_DELAY_SHIFT) & RTW_SETTING_OFF_DELAY_MASK) |
+             (s_quiet_time ? RTW_SETTING_QUIET_TIME : 0),
   };
   app_worker_send_message(RTW_MSG_SETTINGS, &message);
 }
@@ -522,7 +530,7 @@ static void open_positions(void) {
 typedef enum {
   ROW_ENABLED, ROW_SENSITIVITY, ROW_VIEW_ANGLE,
   ROW_DURATION, ROW_OFF_DELAY, ROW_SENSOR, ROW_CHARGER,
-  ROW_SCHEDULE, ROW_START, ROW_STOP, ROW_SLEEP_PAUSE,
+  ROW_SCHEDULE, ROW_START, ROW_STOP, ROW_SLEEP_PAUSE, ROW_QUIET_TIME,
   ROW_LOGGING, ROW_RECORD, ROW_POSITIONS,
 } Row;
 
@@ -534,9 +542,10 @@ static Row row_at(MenuIndex *index) {
     case SECTION_WAKE: return ROW_ENABLED + index->row;
     case SECTION_LIGHT: return ROW_DURATION + index->row;
     case SECTION_SCHEDULE: {
-      // Schedule, its two times when in use, then sleep pause.
+      // Schedule, its two times when in use, then sleep pause and Quiet Time.
       const int time_rows = s_schedule ? 3 : 1;
-      return index->row < time_rows ? ROW_SCHEDULE + index->row : ROW_SLEEP_PAUSE;
+      if (index->row < time_rows) return ROW_SCHEDULE + index->row;
+      return (HAS_SLEEP_PAUSE && index->row == time_rows) ? ROW_SLEEP_PAUSE : ROW_QUIET_TIME;
     }
     default: return ROW_LOGGING + index->row;
   }
@@ -548,7 +557,8 @@ static uint16_t get_num_rows(MenuLayer *menu, uint16_t section, void *context) {
   switch (section) {
     case SECTION_WAKE: return 3;
     case SECTION_LIGHT: return 4;
-    case SECTION_SCHEDULE: return (s_schedule ? 3 : 1) + HAS_SLEEP_PAUSE; // Times only when in use.
+    case SECTION_SCHEDULE: // Times only when in use.
+      return (s_schedule ? 3 : 1) + HAS_SLEEP_PAUSE + HAS_QUIET_TIME;
     default: return 3; // Logging, record position, saved positions.
   }
 }
@@ -649,6 +659,10 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, void *c
       break;
     case ROW_SLEEP_PAUSE:
       title = "Sleep pause"; subtitle = s_sleep_pause_names[s_sleep_pause];
+      break;
+    case ROW_QUIET_TIME:
+      title = "Quiet Time"; subtitle = s_quiet_time ? "Off in Quiet Time" : "Ignores Quiet Time";
+      toggle = s_quiet_time;
       break;
     case ROW_START:
     case ROW_STOP: {
@@ -752,6 +766,11 @@ static void select_click(MenuLayer *menu, MenuIndex *index, void *context) {
     case ROW_SLEEP_PAUSE:
       s_sleep_pause = (s_sleep_pause + 1) % ARRAY_LENGTH(s_sleep_pause_names);
       persist_write_int(RTW_SLEEP_PAUSE_PERSIST_KEY, s_sleep_pause);
+      send_settings();
+      break;
+    case ROW_QUIET_TIME:
+      s_quiet_time = !s_quiet_time;
+      persist_write_bool(RTW_QUIET_TIME_PERSIST_KEY, s_quiet_time);
       send_settings();
       break;
     case ROW_LOGGING:

@@ -14,6 +14,16 @@ static AppTimer *s_off_delay_timer;
 static uint64_t s_lowered_ms;
 // Sample clock: 40 ms per sample, so it only moves forward.
 static uint64_t s_clock_ms;
+// Quiet Time setting: ignore raises while the watch's Quiet Time is on.
+static bool s_quiet_time;
+#if defined(PBL_PLATFORM_APLITE)
+#define quiet_time_now() false // Not available on aplite.
+#else
+// In libpebble for workers too, but missing from pebble_worker.h. It is a plain
+// syscall that covers manual, scheduled and smart Quiet Time.
+bool quiet_time_is_active(void);
+#define quiet_time_now() quiet_time_is_active()
+#endif
 static bool s_charging_enabled, s_plugged_enabled, s_ambient, s_logging;
 static bool s_power_light, s_forced_gesture_light;
 // A light-sensor (system interaction) light we started, and when.
@@ -190,7 +200,10 @@ static void handle_accel(AccelData *data, uint32_t num_samples) {
       s_last_log_ms = timestamp;
       s_have_log_time = true;
     }
-    if (event == RTW_EVENT_RAISE) {
+    if (event == RTW_EVENT_RAISE && s_quiet_time && quiet_time_now()) {
+      // Checked per raise rather than polled, so it follows Quiet Time at once.
+      RTW_LOG(APP_LOG_LEVEL_INFO, "RTW raise ignored: Quiet Time");
+    } else if (event == RTW_EVENT_RAISE) {
       activate_gesture_light(timestamp);
       RTW_LOG(APP_LOG_LEVEL_INFO, "RTW raise detected: %u samples, %lu ms from view entry",
               s_detector.required_view_samples, (unsigned long)s_detector.view_to_raise_ms);
@@ -250,6 +263,7 @@ static void apply_settings(uint32_t duration, unsigned sensitivity, unsigned fla
   }
   s_ambient = flags & RTW_SETTING_AMBIENT;
   s_logging = flags & RTW_SETTING_LOGGING;
+  s_quiet_time = flags & RTW_SETTING_QUIET_TIME;
   s_view_angle = (flags & RTW_SETTING_VIEW_ANGLE_MASK) >> RTW_SETTING_VIEW_ANGLE_SHIFT;
   rtw_detector_set_view_angle(&s_detector, s_view_angle);
   s_off_delay_ms = RTW_OFF_DELAY_MS((flags & RTW_SETTING_OFF_DELAY_MASK) >> RTW_SETTING_OFF_DELAY_SHIFT);
@@ -356,7 +370,8 @@ static void worker_init(void) {
                    (((unsigned)persist_read_int(RTW_VIEW_ANGLE_PERSIST_KEY) << RTW_SETTING_VIEW_ANGLE_SHIFT) &
                     RTW_SETTING_VIEW_ANGLE_MASK) |
                    (((unsigned)persist_read_int(RTW_OFF_DELAY_PERSIST_KEY) << RTW_SETTING_OFF_DELAY_SHIFT) &
-                    RTW_SETTING_OFF_DELAY_MASK);
+                    RTW_SETTING_OFF_DELAY_MASK) |
+                   (persist_read_bool(RTW_QUIET_TIME_PERSIST_KEY) ? RTW_SETTING_QUIET_TIME : 0);
   s_off_delay_timer = NULL;
   s_power_light = s_forced_gesture_light = s_interaction_light = s_view_release_pending = false;
   s_sleep_paused = false;

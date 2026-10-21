@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared settings and tuning values. Acceleration is in milli-g.
-#define RTW_DETECTOR_REVISION 14
+#define RTW_DETECTOR_REVISION 15
 // Persistent keys shared by the app and worker. Keys 7 (old callback batch)
 // and 11 (old viewing samples) are retired; Sensitivity replaces both.
 #define RTW_DURATION_PERSIST_KEY 6
@@ -13,6 +13,7 @@
 #define RTW_SLEEP_PAUSE_PERSIST_KEY 16 // Keys 14 and 15 are the app's schedule and first run.
 #define RTW_VIEW_ANGLE_PERSIST_KEY 17
 #define RTW_OFF_DELAY_PERSIST_KEY 18
+#define RTW_QUIET_TIME_PERSIST_KEY 29 // 19-27 are recorded positions, 28 the app's Enabled.
 #define RTW_ACCEL_SAMPLING_RATE ACCEL_SAMPLING_25HZ
 #define RTW_SAMPLE_INTERVAL_MS 40 // Must match RTW_ACCEL_SAMPLING_RATE.
 // Two samples per callback halves worker wake-ups for at most 40 ms delivery delay.
@@ -40,6 +41,8 @@
 #define RTW_SETTING_OFF_DELAY_SHIFT 8
 #define RTW_SETTING_OFF_DELAY_MASK (3 << RTW_SETTING_OFF_DELAY_SHIFT)
 #define RTW_OFF_DELAY_LEVELS 4 // Off, 3 s, 5 s, 8 s
+// Bit 10: no raise to wake while the watch's Quiet Time is on.
+#define RTW_SETTING_QUIET_TIME (1 << 10)
 #define RTW_OFF_DELAY_MS(level) \
   ((level) == 1 ? 3000 : (level) == 2 ? 5000 : (level) == 3 ? 8000 : 0)
 

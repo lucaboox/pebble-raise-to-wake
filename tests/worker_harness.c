@@ -26,8 +26,9 @@ static BatteryChargeState s_mock_battery;
 static AccelData s_mock_pending[8];
 static uint32_t s_mock_pending_count;
 static bool s_mock_shared_stamp;
-static int s_persist_values[20];
-static bool s_persist_exists[20];
+static int s_persist_values[32];
+static bool s_persist_exists[32];
+static bool s_mock_quiet_time;
 static RtwDetector s_core;
 static int s_mock_hour = 12;
 static HealthEventHandler s_mock_health_handler;
@@ -78,7 +79,9 @@ bool app_timer_cancel(AppTimer *timer) {
   ++s_timer_cancellations;
   return active;
 }
-bool persist_exists(uint32_t key) { return key < 20 && s_persist_exists[key]; }
+bool persist_exists(uint32_t key) { return key < 32 && s_persist_exists[key]; }
+bool quiet_time_is_active(void) { return s_mock_quiet_time; }
+void mock_set_quiet_time(int on) { s_mock_quiet_time = on != 0; }
 int32_t persist_read_int(uint32_t key) { return persist_exists(key) ? s_persist_values[key] : 0; }
 bool persist_read_bool(uint32_t key) { return persist_read_int(key) != 0; }
 void worker_event_loop(void) {}
@@ -113,7 +116,8 @@ void mock_reset(void) {
   s_mock_subscribes = 0;
   s_mock_pending_count = 0;
   s_mock_battery = (BatteryChargeState){0};
-  for (unsigned i = 0; i < 20; ++i) s_persist_exists[i] = false;
+  for (unsigned i = 0; i < 32; ++i) s_persist_exists[i] = false;
+  s_mock_quiet_time = false;
   for (unsigned i = 0; i < 16; ++i) s_mock_timers[i].active = false;
 }
 void mock_setting(int key, int value) { s_persist_values[key] = value; s_persist_exists[key] = true; }

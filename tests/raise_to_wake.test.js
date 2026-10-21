@@ -591,6 +591,24 @@ assert.strictEqual(compile.status, 0, compile.stdout + compile.stderr);
     lower(); raise(); lower(); assert.strictEqual(api.mock_off_calls(), 0);
     expireLast(); assert.strictEqual(api.mock_off_calls(), 1);
   });
+  // Quiet Time setting (key 29 / flag 1 << 10): no raise to wake while Quiet Time is on.
+  test('Quiet Time setting off: raises light during Quiet Time', () => {
+    startWorker(); api.mock_set_quiet_time(1); lower(); raise();
+    assert.strictEqual(api.mock_on_calls(), 1);
+  });
+  test('Quiet Time setting on: raises stay dark during Quiet Time', () => {
+    startWorker({29: 1}); api.mock_set_quiet_time(1); lower(); raise();
+    assert.strictEqual(api.mock_on_calls(), 0); assert.strictEqual(api.mock_interaction_calls(), 0);
+  });
+  test('Quiet Time setting on: raises light again as soon as Quiet Time ends', () => {
+    startWorker({29: 1}); api.mock_set_quiet_time(1); lower(); raise();
+    api.mock_set_quiet_time(0); lower(); raise();
+    assert.strictEqual(api.mock_on_calls(), 1);
+  });
+  test('Quiet Time setting can be switched on live from the app', () => {
+    startWorker(); api.mock_set_quiet_time(1); api.mock_app_message(2, 5, 1, 1 << 10);
+    lower(); raise(); assert.strictEqual(api.mock_on_calls(), 0);
+  });
   test('charging override cancels timer and resets tracking on disconnect', () => {
     startWorker({8: 1}); lower(); raise(); api.mock_battery(1, 1);
     const offCalls = api.mock_off_calls(); api.mock_expire(0);
